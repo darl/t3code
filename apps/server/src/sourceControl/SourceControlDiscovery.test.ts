@@ -9,6 +9,7 @@ import { VcsProcessSpawnError } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as ArcanumCli from "./ArcanumCli.ts";
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as BitbucketApi from "./BitbucketApi.ts";
 import * as GitHubCli from "./GitHubCli.ts";
@@ -26,6 +27,7 @@ const sourceControlProviderRegistryTestLayer = (input: {
         ServerConfig.layerTest(process.cwd(), {
           prefix: "t3-source-control-registry-test-",
         }).pipe(Layer.provide(NodeServices.layer)),
+        Layer.mock(ArcanumCli.ArcanumCli)({}),
         Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
         Layer.mock(BitbucketApi.BitbucketApi)(input.bitbucket),
         Layer.mock(GitHubCli.GitHubCli)({}),
@@ -161,6 +163,12 @@ it.effect("reports implemented tools separately from locally available executabl
           auth: "unauthenticated",
           account: Option.none(),
         },
+        {
+          kind: "arcanum",
+          status: "missing",
+          auth: "unknown",
+          account: Option.none(),
+        },
       ],
     );
     const bitbucket = result.sourceControlProviders.find((item) => item.kind === "bitbucket");
@@ -207,6 +215,9 @@ Logged in to gitlab.com as gitlab-user
         input.args.join(" ") === "account show --query user.name -o tsv"
       ) {
         return Effect.succeed(processOutput("azure-user@example.com\n"));
+      }
+      if (input.command === "arc" && input.args.join(" ") === "token show") {
+        return Effect.succeed(processOutput("token-value-never-shown\n"));
       }
       return Effect.fail(
         new VcsProcessSpawnError({
@@ -275,6 +286,12 @@ Logged in to gitlab.com as gitlab-user
           kind: "bitbucket",
           auth: "authenticated",
           account: Option.some("bitbucket-user"),
+          detail: Option.none(),
+        },
+        {
+          kind: "arcanum",
+          auth: "authenticated",
+          account: Option.none(),
           detail: Option.none(),
         },
       ],

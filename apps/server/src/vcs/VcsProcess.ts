@@ -78,7 +78,10 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
         normalized.includes("404"))) ||
     (command === "az" &&
       normalized.includes("pull request") &&
-      (normalized.includes("not found") || normalized.includes("does not exist")))
+      (normalized.includes("not found") || normalized.includes("does not exist"))) ||
+    (command === "arc" &&
+      (normalized.includes("no pull request in arcanum") ||
+        normalized.includes("can't find any pr")))
   ) {
     return "not-found";
   }

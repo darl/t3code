@@ -68,6 +68,14 @@ export const JujutsuIcon: Icon = (props) => {
   );
 };
 
+// Arcanum has no public SVG mark; a tiny inline PNG (16x16) serves as the icon.
+const ARCANUM_ICON_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAACjklEQVQ4jXVSS0hVURRd+3Puva+XH4LKZkGDCImyNEgrjAYG0QeDogikoJkGFjbJ6iWU0MiwJk7eIILQatiHqBxUNDGiQCqDSsoGfc3Pe71z7n0NrjfsZRsWHPbZa5291z6EOaK7e7SOi3KBmNYJ80dRua6ef7a1tfxraS2VJrpOjtRAZJCZy5kZMQQqPGLgN7V1VL79r0Bb24hfMT8aYqHqhExEP8IwHGbR8VTgR2Da29FRNZVwdLZAys8fcSFVUxSTpyYm77x89XqD55v6IAgQBAEqK8q2A7iacDg5tLc/Tjlnj1nr4JyFc4VLPRdrt5ZV6gJmeTbTDfK/XDaTKfI/AoU8H7LWLY7JLjedd2cAYGBgT8H4bqeIQFWgysHY2FDwj4Bz7rC1FtY62IK719u75nNyNzCwZ9QLTIOqPjFG2vr6aqf/8qCl5f5aa+2qP8YxvSndTja75TGA9aV5BYDIFQ4WScBMMwKyfHbR0SNPt4jqcTXSqKrWGD1/KrOsCwAok8nwy+G6D0S0hJkhIhBhCOtdUR1WQw0qplZVMRtGzYHO00uvUHPz9QYqysOk/VggNkxEoaoREz0PwyhXsG6Z75vpioqyqXR6fpV6qRXqCsVmIodEACjGP4wIudzE5Pj4Tx+g1aoKYwxUFRMTk0in5/2qqlq0i60t7LTWwjmHMAwTRPl87tzV/m3lt+7s91LiLTUeP1EVGBN3F0Wh//nLtya21i50zs0SiBBF0fn+aztOAFQEgBs3d7//9v3FRvW8odiDeDwhqmdn3ekwDItRFGEGl8H5ztJ1DQ5mXBDkN6uYT6rxKKKSJQDYtCm7MuXJSlIdvX1736Pk5bmisfGBVlenlxtjpnp6at79BkFuBzh7eecCAAAAAElFTkSuQmCC";
+
+export const ArcanumIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <img src={ARCANUM_ICON_DATA_URL} alt="" className={cn("object-contain", className)} />
+);
+
 export const GitLabIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 32 32" fill="none">
     <path

@@ -1,7 +1,7 @@
 import type { SourceControlProviderInfo, SourceControlProviderKind } from "@t3tools/contracts";
 
 export interface ChangeRequestPresentation {
-  readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";
+  readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "arcanum" | "change-request";
   readonly providerName: string;
   readonly shortName: string;
   readonly longName: string;
@@ -64,6 +64,17 @@ const BITBUCKET_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   urlExample: "https://bitbucket.org/workspace/repo/pull-requests/42",
 };
 
+const ARCANUM_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "arcanum",
+  providerName: "Arcanum",
+  shortName: "PR",
+  longName: "pull request",
+  pluralLongName: "pull requests",
+  providerLongName: "Arcanum pull request",
+  checkoutCommandExample: "arc pr checkout 123",
+  urlExample: "https://a.yandex-team.ru/review/42",
+};
+
 const GENERIC_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "change-request",
   providerName: "source control",
@@ -87,6 +98,8 @@ export function resolveChangeRequestPresentation(
       return AZURE_DEVOPS_CHANGE_REQUEST_PRESENTATION;
     case "bitbucket":
       return BITBUCKET_CHANGE_REQUEST_PRESENTATION;
+    case "arcanum":
+      return ARCANUM_CHANGE_REQUEST_PRESENTATION;
     case "unknown":
       return GENERIC_CHANGE_REQUEST_PRESENTATION;
   }
@@ -183,6 +196,12 @@ function isBitbucketHost(host: string): boolean {
   return host === "bitbucket.org" || host.includes("bitbucket");
 }
 
+// Arcadia working copies surface their remote as arc://arcadia/arcadia
+// (URL host "arcadia"); the Arcanum review UI lives at a.yandex-team.ru.
+function isArcanumHost(host: string): boolean {
+  return host === "arcadia" || host === "a.yandex-team.ru" || host.includes("arcanum");
+}
+
 export function detectSourceControlProviderFromRemoteUrl(
   remoteUrl: string,
 ): SourceControlProviderInfo | null {
@@ -221,6 +240,14 @@ export function detectSourceControlProviderFromRemoteUrl(
       kind: "bitbucket",
       name: hostname === "bitbucket.org" ? "Bitbucket" : "Bitbucket Self-Hosted",
       baseUrl: toBaseUrl(host),
+    };
+  }
+
+  if (isArcanumHost(hostname)) {
+    return {
+      kind: "arcanum",
+      name: "Arcanum",
+      baseUrl: "https://a.yandex-team.ru",
     };
   }
 
