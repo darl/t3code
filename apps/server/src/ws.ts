@@ -110,6 +110,7 @@ import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as ArcanumCli from "./sourceControl/ArcanumCli.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
@@ -2312,6 +2313,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                     SourceControlProviderRegistry.layer.pipe(
                       Layer.provide(
                         Layer.mergeAll(
+                          ArcanumCli.layer,
                           AzureDevOpsCli.layer,
                           BitbucketApi.layer,
                           GitHubCli.layer,
