@@ -15,9 +15,10 @@ export function resolveSidebarStageBackdropVariant(
   stageLabel: string,
 ): SidebarStageBackdropVariant | null {
   const normalized = stageLabel.trim().toLowerCase();
-  if (normalized === "nightly") return "nightly";
   if (normalized === "dev") return "dev";
-  return null;
+  // Fork tweak: show the nightly sky art on every non-dev channel instead of
+  // reserving it for nightly builds.
+  return "nightly";
 }
 
 export function useSidebarStageBackdropVariant(): SidebarStageBackdropVariant | null {
