@@ -1,3 +1,4 @@
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -5,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import type * as DateTime from "effect/DateTime";
 import type * as Option from "effect/Option";
 
@@ -17,6 +19,14 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 
 // Arcanum's default (and only) target branch namespace root.
 const ARCANUM_DEFAULT_BRANCH = "trunk";
+
+// The merged/discarded sweep listing is user-scoped, not branch-scoped, so
+// one `arc pr list -o` answer serves every branch the PR poller asks about
+// within the TTL. A minute keeps the extra Arcanum API load at ≤1 call/min
+// regardless of worktree count while staying well inside the poller's own
+// 2-minute lookup cache.
+const OUTGOING_PR_SWEEP_TTL_MS = 60_000;
+const OUTGOING_PR_SWEEP_LIMIT = 100;
 
 const arcanumCliExecutionErrorContext = {
   operation: Schema.Literal("execute"),
@@ -324,13 +334,98 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const outgoingPrSweepCache = yield* SynchronizedRef.make<{
+    readonly expiresAtMillis: number;
+    readonly entries: ReadonlyArray<ArcanumPullRequestSummary>;
+  } | null>(null);
+
+  // SynchronizedRef serializes the refresh: concurrent cache misses wait for
+  // one `arc pr list` call instead of racing their own. A failed refresh
+  // leaves the previous entry in place and surfaces the error to that caller
+  // only.
+  const listOutgoingPullRequests = (cwd: string) =>
+    SynchronizedRef.updateAndGetEffect(outgoingPrSweepCache, (cached) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          cached !== null && cached.expiresAtMillis > now
+            ? Effect.succeed(cached)
+            : execute({
+                cwd,
+                args: [
+                  "pr",
+                  "list",
+                  "-o",
+                  "-S",
+                  "all",
+                  "--sort",
+                  "date",
+                  "--desc",
+                  "--limit",
+                  String(OUTGOING_PR_SWEEP_LIMIT),
+                  "--json",
+                ],
+              }).pipe(
+                Effect.map((result) => ({
+                  expiresAtMillis: now + OUTGOING_PR_SWEEP_TTL_MS,
+                  // jsonl: one PR object per line; undecodable lines are
+                  // skipped rather than failing the sweep.
+                  entries: result.stdout
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter((line) => line.length > 0)
+                    .flatMap((line) => {
+                      const decoded = decodeArcanumPullRequestJson(line);
+                      return Result.isSuccess(decoded) ? [decoded.success] : [];
+                    }),
+                })),
+              ),
+        ),
+      ),
+    ).pipe(Effect.map((cached) => cached?.entries ?? []));
+
+  // `arc pr status <branch>` resolves the branch→PR mapping only while the
+  // PR is open — it answers "no pull request" the moment the PR merges or
+  // is discarded. Non-open lookups therefore fall back to sweeping the
+  // user's own PRs (t3code only polls branches it published as this user)
+  // and matching on the source branch. Bounded to the newest
+  // OUTGOING_PR_SWEEP_LIMIT PRs — plenty for catching a recent merge, which
+  // is all the poller needs.
+  const sweepPullRequestsByBranch = (input: {
+    readonly cwd: string;
+    readonly headBranch: string;
+    readonly state: "open" | "closed" | "merged" | "all";
+  }) =>
+    (input.headBranch.startsWith("users/")
+      ? Effect.succeed<ReadonlyArray<string>>([input.headBranch])
+      : arcanumLogin(input.cwd).pipe(
+          Effect.orElseSucceed(() => null),
+          Effect.map((login) =>
+            login === null
+              ? [input.headBranch]
+              : [input.headBranch, `users/${login}/${input.headBranch}`],
+          ),
+        )
+    ).pipe(
+      Effect.flatMap((candidateBranches) =>
+        listOutgoingPullRequests(input.cwd).pipe(
+          Effect.map((entries) =>
+            entries
+              .filter((entry) => candidateBranches.includes(entry.headRefName))
+              .flatMap((entry) => filterByState(entry, input.state)),
+          ),
+        ),
+      ),
+    );
+
   return ArcanumCli.of({
     execute,
     // Arcanum has at most one PR per source branch, so "list by head branch"
     // is a single `arc pr status <branch>` probe; a missing PR is an empty
     // list, not an error. Branches are published under users/<login>/, so a
-    // miss on the plain local name retries the users/-qualified form before
-    // concluding there is no PR.
+    // miss on the plain local name retries the users/-qualified form. The
+    // probe only resolves OPEN PRs, so when non-open states are wanted and
+    // the probe found nothing, the cached outgoing-PR sweep gets the last
+    // word — that is how a merged/discarded PR keeps reporting its state.
     listPullRequests: (input) =>
       statusPullRequest({
         cwd: input.cwd,
@@ -354,6 +449,15 @@ export const make = Effect.gen(function* () {
                 // The primary lookup already answered "no PR"; fallback
                 // failures must not turn that into a poll error.
                 Effect.orElseSucceed((): ReadonlyArray<ArcanumPullRequestSummary> => []),
+              ),
+        ),
+        Effect.flatMap((found) =>
+          found.length > 0 || input.state === "open"
+            ? Effect.succeed(found)
+            : sweepPullRequestsByBranch(input).pipe(
+                // Same contract as above: the probe already gave a valid
+                // "no open PR" answer, so a sweep failure falls back to it.
+                Effect.orElseSucceed(() => found),
               ),
         ),
       ),
