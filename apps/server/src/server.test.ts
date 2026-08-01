@@ -501,6 +501,7 @@ const buildAppUnderTest = (options?: {
       ...options?.layers?.gitVcsDriver,
     });
     const gitManagerLayer = Layer.mock(GitManager.GitManager)({
+      resolveWorktreeThreadPath: (input) => Effect.succeed(input.worktreePath),
       ...options?.layers?.gitManager,
     });
     const workspaceEntriesLayer = WorkspaceEntries.layer.pipe(

@@ -2708,11 +2708,24 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const removeWorktree: GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"] = Effect.fn(
     "removeWorktree",
   )(function* (input) {
+    // Thread worktree paths may point into a subdirectory of the worktree
+    // (subdirectory-rooted projects); `git worktree remove` needs the root.
+    const toplevelResult = yield* executeGit(
+      "GitVcsDriver.removeWorktree.toplevel",
+      input.path,
+      ["rev-parse", "--show-toplevel"],
+      {
+        timeoutMs: 5_000,
+        allowNonZeroExit: true,
+      },
+    ).pipe(Effect.orElseSucceed(() => null));
+    const toplevel =
+      toplevelResult !== null && toplevelResult.exitCode === 0 ? toplevelResult.stdout.trim() : "";
     const args = ["worktree", "remove"];
     if (input.force) {
       args.push("--force");
     }
-    args.push(input.path);
+    args.push(toplevel.length > 0 ? toplevel : input.path);
     yield* executeGit("GitVcsDriver.removeWorktree", input.cwd, args, {
       timeoutMs: 15_000,
       fallbackErrorDetail: "git worktree remove failed",
