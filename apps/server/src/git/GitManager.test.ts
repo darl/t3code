@@ -4673,4 +4673,68 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       ]);
     }),
   );
+
+  it.effect("resolveWorktreeThreadPath lands in the project subdirectory of the worktree", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* makeDirectory(NodePath.join(repoDir, "packages", "app"));
+      yield* fileSystem.writeFileString(
+        NodePath.join(repoDir, "packages", "app", "index.ts"),
+        "export {};\n",
+      );
+      yield* runGit(repoDir, ["add", "."]);
+      yield* runGit(repoDir, ["commit", "-m", "Add packages/app"]);
+      const worktreePath = NodePath.join(
+        yield* makeTempDir("t3code-git-manager-worktrees-"),
+        "feature-worktree",
+      );
+      yield* runGit(repoDir, ["worktree", "add", "-b", "feature/landing", worktreePath]);
+
+      const { manager } = yield* makeManager();
+
+      const threadPath = yield* manager.resolveWorktreeThreadPath({
+        cwd: NodePath.join(repoDir, "packages", "app"),
+        worktreePath,
+      });
+      expect(threadPath).toBe(NodePath.join(worktreePath, "packages", "app"));
+    }),
+  );
+
+  it.effect("resolveWorktreeThreadPath falls back to the worktree root", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      // Present in the main working tree only: never committed, so the
+      // subdirectory does not exist inside the worktree.
+      yield* makeDirectory(NodePath.join(repoDir, "local-only"));
+      const worktreePath = NodePath.join(
+        yield* makeTempDir("t3code-git-manager-worktrees-"),
+        "feature-worktree",
+      );
+      yield* runGit(repoDir, ["worktree", "add", "-b", "feature/fallback", worktreePath]);
+      const nonRepoDir = yield* makeTempDir("t3code-git-manager-non-repo-");
+
+      const { manager } = yield* makeManager();
+
+      const fromRepoRoot = yield* manager.resolveWorktreeThreadPath({
+        cwd: repoDir,
+        worktreePath,
+      });
+      expect(fromRepoRoot).toBe(worktreePath);
+
+      const fromMissingSubdirectory = yield* manager.resolveWorktreeThreadPath({
+        cwd: NodePath.join(repoDir, "local-only"),
+        worktreePath,
+      });
+      expect(fromMissingSubdirectory).toBe(worktreePath);
+
+      const fromNonRepository = yield* manager.resolveWorktreeThreadPath({
+        cwd: nonRepoDir,
+        worktreePath,
+      });
+      expect(fromNonRepository).toBe(worktreePath);
+    }),
+  );
 });

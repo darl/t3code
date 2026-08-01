@@ -1380,6 +1380,38 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(yield* fileSystem.exists(worktreePath), false);
       }),
     );
+
+    it.effect("removes a worktree when given a path inside the worktree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "packages/app/index.ts", "export {};\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add subdirectory"]);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-"),
+          "subdir-worktree",
+        );
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/subdir-worktree",
+        });
+
+        // Thread worktree paths may point at the project subdirectory rather
+        // than the worktree root; removal must still remove the worktree.
+        yield* driver.removeWorktree({
+          cwd,
+          path: pathService.join(worktreePath, "packages", "app"),
+        });
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+      }),
+    );
   });
 
   describe("remote operations", () => {

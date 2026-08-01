@@ -941,7 +941,12 @@ const makeWsRpcLayer = (
                 baseRefName: bootstrap.prepareWorktree.baseBranch,
                 path: null,
               });
-              targetWorktreePath = worktree.worktree.path;
+              // Land the thread in the project's subdirectory of the new
+              // worktree when the project is rooted below the repository root.
+              targetWorktreePath = yield* gitWorkflow.resolveWorktreeThreadPath({
+                cwd: bootstrap.prepareWorktree.projectCwd,
+                worktreePath: worktree.worktree.path,
+              });
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
