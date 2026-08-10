@@ -7,6 +7,8 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { TestClock } from "effect/testing";
 
+import { ChildProcessSpawner } from "effect/unstable/process";
+
 import * as ProcessRunner from "../processRunner.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
@@ -22,6 +24,29 @@ const git = (cwd: string, args: ReadonlyArray<string>) =>
     });
   }).pipe(Effect.provide(ProcessRunner.layer));
 
+function processOutput(stdout: string, code: number): ProcessRunner.ProcessRunOutput {
+  return {
+    stdout,
+    stderr: "",
+    code: ChildProcessSpawner.ExitCode(code),
+    timedOut: false,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    stdoutInvalidUtf8: false,
+    stderrInvalidUtf8: false,
+  };
+}
+
+/** A working copy git knows nothing about, inside which `arc root` names the mount. */
+const arcMountProcessRunnerLayer = Layer.mock(ProcessRunner.ProcessRunner)({
+  run: (input) =>
+    input.command === "git"
+      ? Effect.succeed(processOutput("", 128))
+      : input.command === "arc" && input.args?.[0] === "root"
+        ? Effect.succeed(processOutput("/w/arcadia\n", 0))
+        : Effect.succeed(processOutput("", 1)),
+});
+
 const makeRepositoryIdentityResolverTestLayer = (options: {
   readonly positiveCacheTtl?: Duration.Input;
   readonly negativeCacheTtl?: Duration.Input;
@@ -33,6 +58,38 @@ const makeRepositoryIdentityResolverTestLayer = (options: {
       ...options,
     }),
   ).pipe(Layer.provide(ProcessRunner.layer));
+
+it.effect("synthesizes the Arcadia identity where git answers nothing but arc names a root", () =>
+  Effect.gen(function* () {
+    const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+
+    const identity = yield* resolver.resolve("/w/arcadia/project/lib");
+
+    // One monorepo per mount: the canonical key's first segment is the host the
+    // pull-requests page buckets by, and it is the host the shared remote detection reads
+    // arc://arcadia/arcadia as — kind "arcanum".
+    expect(identity).toEqual({
+      canonicalKey: "arcadia/arcadia",
+      locator: {
+        source: "git-remote",
+        remoteName: "arcadia",
+        remoteUrl: "arc://arcadia/arcadia",
+      },
+      rootPath: "/w/arcadia",
+      displayName: "arcadia",
+      provider: "arcanum",
+      owner: "arcadia",
+      name: "arcadia",
+    });
+  }).pipe(
+    Effect.provide(
+      Layer.effect(
+        RepositoryIdentityResolver.RepositoryIdentityResolver,
+        RepositoryIdentityResolver.make({ cacheCapacity: 16 }),
+      ).pipe(Layer.provide(arcMountProcessRunnerLayer)),
+    ),
+  ),
+);
 
 it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
   it.effect("normalizes equivalent GitHub remotes into a stable repository identity", () =>

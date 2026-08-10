@@ -114,6 +114,47 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.
   },
 );
 
+/** How every Arcadia working copy names its remote; the whole monorepo is the one repository. */
+const ARCADIA_REMOTE_URL = "arc://arcadia/arcadia";
+
+/**
+ * An Arcadia checkout is mounted by `arc` and has no `.git` for the probes above to read, so
+ * git answers nothing for it. `arc root` is the cheapest fact arc states — the mount root,
+ * printed only inside a mount — and every arc checkout is the same monorepo, so the identity
+ * is a constant: `arcadia/arcadia`, whose first segment is the host the page buckets by.
+ */
+const resolveArcadiaIdentity = Effect.fn("RepositoryIdentityResolver.resolveArcadia")(function* (
+  cacheKey: string,
+): Effect.fn.Return<RepositoryIdentity | null, never, ProcessRunner.ProcessRunner> {
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const rootResult = yield* processRunner
+    .run({
+      command: "arc",
+      args: ["root"],
+      cwd: cacheKey,
+      timeoutBehavior: "timedOutResult",
+    })
+    .pipe(Effect.option);
+  if (rootResult._tag === "None" || rootResult.value.code !== 0) {
+    return null;
+  }
+  const rootPath = rootResult.value.stdout.trim();
+  if (rootPath.length === 0) {
+    return null;
+  }
+  return {
+    canonicalKey: "arcadia/arcadia",
+    locator: { source: "git-remote", remoteName: "arcadia", remoteUrl: ARCADIA_REMOTE_URL },
+    rootPath,
+    displayName: "arcadia",
+    // The same answer detectSourceControlProviderFromGitRemoteUrl gives for the remote's url,
+    // spelled as a constant because this identity never came from a remote listing.
+    provider: "arcanum",
+    owner: "arcadia",
+    name: "arcadia",
+  };
+});
+
 const resolveRepositoryIdentityFromCacheKey = Effect.fn(
   "RepositoryIdentityResolver.resolveFromCacheKey",
 )(function* (
@@ -128,7 +169,8 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
     })
     .pipe(Effect.option);
   if (remoteResult._tag === "None" || remoteResult.value.code !== 0) {
-    return null;
+    // Not a git checkout at all, which is what an arc mount looks like from here.
+    return yield* resolveArcadiaIdentity(cacheKey);
   }
 
   const remote = pickPrimaryRemote(parseRemoteFetchUrls(remoteResult.value.stdout));
