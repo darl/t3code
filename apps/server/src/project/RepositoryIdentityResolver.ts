@@ -118,10 +118,39 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.
 const ARCADIA_REMOTE_URL = "arc://arcadia/arcadia";
 
 /**
- * An Arcadia checkout is mounted by `arc` and has no `.git` for the probes above to read, so
- * git answers nothing for it. `arc root` is the cheapest fact arc states — the mount root,
- * printed only inside a mount — and every arc checkout is the same monorepo, so the identity
- * is a constant: `arcadia/arcadia`, whose first segment is the host the page buckets by.
+ * The one identity every Arcadia checkout shares, whichever probe discovered it. Both roads —
+ * `arc root` and a git shim's remote listing — must converge on byte-identical
+ * canonicalKey/displayName/provider, so host bucketing ("arcadia") and de-duplication agree
+ * whichever answered. The locator keeps whatever the discovering probe really saw.
+ */
+function arcadiaIdentity(input: {
+  readonly remoteName: string;
+  readonly remoteUrl: string;
+  readonly rootPath: string;
+}): RepositoryIdentity {
+  return {
+    canonicalKey: "arcadia/arcadia",
+    locator: {
+      source: "git-remote",
+      remoteName: input.remoteName,
+      remoteUrl: input.remoteUrl,
+    },
+    rootPath: input.rootPath,
+    displayName: "arcadia",
+    // The same answer detectSourceControlProviderFromGitRemoteUrl gives for the remote's url,
+    // spelled as a constant because normalizeGitRemoteUrl cannot read the arc:// scheme.
+    provider: "arcanum",
+    owner: "arcadia",
+    name: "arcadia",
+  };
+}
+
+/**
+ * An Arcadia checkout is mounted by `arc` and usually has no `.git` for the probes above to
+ * read, so git answers nothing for it. `arc root` is the cheapest fact arc states — the mount
+ * root, printed only inside a mount — and every arc checkout is the same monorepo, so the
+ * identity is a constant: `arcadia/arcadia`, whose first segment is the host the page buckets
+ * by.
  */
 const resolveArcadiaIdentity = Effect.fn("RepositoryIdentityResolver.resolveArcadia")(function* (
   cacheKey: string,
@@ -142,17 +171,7 @@ const resolveArcadiaIdentity = Effect.fn("RepositoryIdentityResolver.resolveArca
   if (rootPath.length === 0) {
     return null;
   }
-  return {
-    canonicalKey: "arcadia/arcadia",
-    locator: { source: "git-remote", remoteName: "arcadia", remoteUrl: ARCADIA_REMOTE_URL },
-    rootPath,
-    displayName: "arcadia",
-    // The same answer detectSourceControlProviderFromGitRemoteUrl gives for the remote's url,
-    // spelled as a constant because this identity never came from a remote listing.
-    provider: "arcanum",
-    owner: "arcadia",
-    name: "arcadia",
-  };
+  return arcadiaIdentity({ remoteName: "arcadia", remoteUrl: ARCADIA_REMOTE_URL, rootPath });
 });
 
 const resolveRepositoryIdentityFromCacheKey = Effect.fn(
@@ -169,12 +188,23 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
     })
     .pipe(Effect.option);
   if (remoteResult._tag === "None" || remoteResult.value.code !== 0) {
-    // Not a git checkout at all, which is what an arc mount looks like from here.
+    // Not a git checkout at all, which is what an arc mount usually looks like from here.
     return yield* resolveArcadiaIdentity(cacheKey);
   }
 
   const remote = pickPrimaryRemote(parseRemoteFetchUrls(remoteResult.value.stdout));
-  return remote ? buildRepositoryIdentity({ ...remote, rootPath: cacheKey }) : null;
+  if (remote === null) {
+    return null;
+  }
+  // The git probe can succeed inside an arc mount: some deployments install a git shim
+  // (arc-git) as `git` there, and it answers `remote -v` with the arc remote itself. That
+  // remote must not go through buildRepositoryIdentity — normalizeGitRemoteUrl cannot read
+  // the arc:// scheme and would mangle the key into "arc://…" — so it short-circuits to the
+  // same constant identity the `arc root` road synthesizes.
+  if (remote.remoteUrl.trim().toLowerCase() === ARCADIA_REMOTE_URL) {
+    return arcadiaIdentity({ ...remote, rootPath: cacheKey });
+  }
+  return buildRepositoryIdentity({ ...remote, rootPath: cacheKey });
 });
 
 export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (

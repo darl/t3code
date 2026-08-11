@@ -47,6 +47,39 @@ const arcMountProcessRunnerLayer = Layer.mock(ProcessRunner.ProcessRunner)({
         : Effect.succeed(processOutput("", 1)),
 });
 
+/**
+ * A mount where a git shim (arc-git installed as `git`) answers the git probes itself, so the
+ * `arc root` road is never taken and the arc remote arrives through `git remote -v`.
+ */
+const arcGitShimProcessRunnerLayer = Layer.mock(ProcessRunner.ProcessRunner)({
+  run: (input) =>
+    input.command === "git" && input.args?.includes("rev-parse")
+      ? Effect.succeed(processOutput("/w/arcadia\n", 0))
+      : input.command === "git" && input.args?.includes("remote")
+        ? Effect.succeed(
+            processOutput(
+              "arcadia\tarc://arcadia/arcadia (fetch)\narcadia\tarc://arcadia/arcadia (push)\n",
+              0,
+            ),
+          )
+        : Effect.succeed(processOutput("", 1)),
+});
+
+/** The one identity every Arcadia checkout resolves to, whichever probe discovered it. */
+const ARCADIA_IDENTITY = {
+  canonicalKey: "arcadia/arcadia",
+  locator: {
+    source: "git-remote",
+    remoteName: "arcadia",
+    remoteUrl: "arc://arcadia/arcadia",
+  },
+  rootPath: "/w/arcadia",
+  displayName: "arcadia",
+  provider: "arcanum",
+  owner: "arcadia",
+  name: "arcadia",
+};
+
 const makeRepositoryIdentityResolverTestLayer = (options: {
   readonly positiveCacheTtl?: Duration.Input;
   readonly negativeCacheTtl?: Duration.Input;
@@ -68,25 +101,33 @@ it.effect("synthesizes the Arcadia identity where git answers nothing but arc na
     // One monorepo per mount: the canonical key's first segment is the host the
     // pull-requests page buckets by, and it is the host the shared remote detection reads
     // arc://arcadia/arcadia as — kind "arcanum".
-    expect(identity).toEqual({
-      canonicalKey: "arcadia/arcadia",
-      locator: {
-        source: "git-remote",
-        remoteName: "arcadia",
-        remoteUrl: "arc://arcadia/arcadia",
-      },
-      rootPath: "/w/arcadia",
-      displayName: "arcadia",
-      provider: "arcanum",
-      owner: "arcadia",
-      name: "arcadia",
-    });
+    expect(identity).toEqual(ARCADIA_IDENTITY);
   }).pipe(
     Effect.provide(
       Layer.effect(
         RepositoryIdentityResolver.RepositoryIdentityResolver,
         RepositoryIdentityResolver.make({ cacheCapacity: 16 }),
       ).pipe(Layer.provide(arcMountProcessRunnerLayer)),
+    ),
+  ),
+);
+
+it.effect("resolves the same constant when a git shim reports the arc remote itself", () =>
+  Effect.gen(function* () {
+    const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+
+    const identity = yield* resolver.resolve("/w/arcadia/project/lib");
+
+    // normalizeGitRemoteUrl cannot read the arc:// scheme, so the shim's remote must not go
+    // through it — both discovery roads converge on the identical constant, and the host
+    // bucket stays "arcadia" rather than "arc:".
+    expect(identity).toEqual(ARCADIA_IDENTITY);
+  }).pipe(
+    Effect.provide(
+      Layer.effect(
+        RepositoryIdentityResolver.RepositoryIdentityResolver,
+        RepositoryIdentityResolver.make({ cacheCapacity: 16 }),
+      ).pipe(Layer.provide(arcGitShimProcessRunnerLayer)),
     ),
   ),
 );
