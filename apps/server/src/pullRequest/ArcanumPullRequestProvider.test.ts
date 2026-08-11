@@ -136,13 +136,19 @@ describe("ArcanumPullRequestProvider.make", () => {
               Effect.sync(() => {
                 calls.push("enrichment");
                 return {
-                  checks: [
-                    { name: "build", status: "success" as const, description: null, url: null },
-                  ],
                   isDraft: true,
                   additions: 5,
                   deletions: 1,
+                  diffSetId: "777",
                 };
+              }),
+            ),
+            getChecks: vi.fn(() =>
+              Effect.sync(() => {
+                calls.push("checks");
+                return [
+                  { name: "build", status: "success" as const, description: null, url: null },
+                ];
               }),
             ),
             getActiveDiff: vi.fn(() =>
@@ -166,8 +172,9 @@ describe("ArcanumPullRequestProvider.make", () => {
 
       const detail = yield* provider.getChangeRequest(target);
 
-      // Sequential, one request a second being Arcanum's ceiling — never a burst.
-      expect(calls).toEqual(["detail", "enrichment", "activeDiff", "changelist"]);
+      // Sequential, one request a second being Arcanum's ceiling — never a burst. The checks
+      // ride the diff set the enrichment named, because only that endpoint reports statuses.
+      expect(calls).toEqual(["detail", "enrichment", "checks", "activeDiff", "changelist"]);
       expect(detail).toMatchObject({
         number: 123456,
         title: "paths: tighten the family engines",

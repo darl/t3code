@@ -426,28 +426,17 @@ export function decodePullRequestDetailJson(
 }
 
 // ---------------------------------------------------------------------------
-// Enrichment: GET /v1/review-requests/{id}?fields=checks,status,active_diff_set(...).
+// Enrichment: GET /v1/review-requests/{id}?fields=status,active_diff_set(...),
+// then GET /v1/review-requests/{id}/diff-sets/{diffSetId}/checks.
 // ---------------------------------------------------------------------------
 
-/**
- * One check, shape verified live: {system: "CI"|"arcanum", type, required, satisfied, status,
- * description, system_check_uri, updated_at}.
- */
-const RawCheckSchema = Schema.Struct({
-  system: Schema.optional(Schema.NullOr(Schema.String)),
-  type: Schema.optional(Schema.NullOr(Schema.String)),
-  status: Schema.optional(Schema.NullOr(Schema.String)),
-  description: Schema.optional(Schema.NullOr(Schema.String)),
-  system_check_uri: Schema.optional(Schema.NullOr(Schema.String)),
-});
-
 const RawEnrichmentSchema = Schema.Struct({
-  checks: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
   /** draft | published | discarded — the publication state the v2 detail does not carry. */
   status: Schema.optional(Schema.NullOr(Schema.String)),
   active_diff_set: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
+        id: Schema.optional(Schema.NullOr(Schema.Union([Schema.Int, Schema.String]))),
         patch_stats: Schema.optional(
           Schema.NullOr(
             Schema.Struct({
@@ -462,18 +451,53 @@ const RawEnrichmentSchema = Schema.Struct({
 });
 
 export interface ArcanumPullRequestEnrichment {
-  readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly isDraft: boolean;
   readonly additions: number;
   readonly deletions: number;
+  /** The active diff set's id, which is where the checks with real statuses live. */
+  readonly diffSetId: string | null;
 }
 
 const decodeEnrichmentPayload = Schema.decodeUnknownExit(RawEnrichmentSchema);
+
+export function decodePullRequestEnrichmentJson(
+  raw: string,
+): Result.Result<ArcanumPullRequestEnrichment, DecodeFailure> {
+  const envelope = decodeEnvelope(raw);
+  if (!Result.isSuccess(envelope)) return Result.fail(envelope.failure);
+  const decoded = decodeEnrichmentPayload(envelope.success.data);
+  if (Exit.isFailure(decoded)) return Result.fail(decoded.cause);
+  const enrichment = decoded.value;
+  const diffSetId = enrichment.active_diff_set?.id;
+  return Result.succeed({
+    isDraft: enrichment.status?.trim().toLowerCase() === "draft",
+    additions: enrichment.active_diff_set?.patch_stats?.additions ?? 0,
+    deletions: enrichment.active_diff_set?.patch_stats?.deletions ?? 0,
+    diffSetId: diffSetId === null || diffSetId === undefined ? null : String(diffSetId),
+  });
+}
+
+/**
+ * One check of `/v1/review-requests/{id}/diff-sets/{diffSetId}/checks`, shape verified live
+ * (2026-08-11): {system: "CI"|"arcanum", type, status, description, system_check_uri,
+ * updated_at, ...}. The entity's own `checks` field carries NO `status` key at all — reading
+ * it is what once rendered every check as neutral — so statuses are read from here.
+ */
+const RawCheckSchema = Schema.Struct({
+  system: Schema.optional(Schema.NullOr(Schema.String)),
+  type: Schema.optional(Schema.NullOr(Schema.String)),
+  status: Schema.optional(Schema.NullOr(Schema.String)),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  system_check_uri: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 const decodeCheckPayload = Schema.decodeUnknownExit(RawCheckSchema);
 
 /**
- * The check status vocabulary, verified live: unknown|pending|success|failure|error|cancelled|
- * skipped|action_required. Anything new reads as neutral rather than failing the check.
+ * The check status vocabulary as the diff-set checks endpoint answers it — pending, success,
+ * failure and skipped observed live (2026-08-11), with running, error, cancelled, unknown and
+ * action_required in the swagger beside them. Anything new reads as neutral rather than
+ * failing the check.
  */
 function toCheckStatus(value: string | null | undefined): PullRequestCheckStatus {
   switch (value?.trim().toLowerCase()) {
@@ -483,6 +507,7 @@ function toCheckStatus(value: string | null | undefined): PullRequestCheckStatus
     case "error":
       return "failure";
     case "pending":
+    case "running":
       return "pending";
     case "cancelled":
       return "cancelled";
@@ -494,34 +519,28 @@ function toCheckStatus(value: string | null | undefined): PullRequestCheckStatus
   }
 }
 
-export function decodePullRequestEnrichmentJson(
+/** Malformed and nameless entries are skipped rather than failing the whole board. */
+export function decodeDiffSetChecksJson(
   raw: string,
-): Result.Result<ArcanumPullRequestEnrichment, DecodeFailure> {
+): Result.Result<ReadonlyArray<PullRequestCheck>, DecodeFailure> {
   const envelope = decodeEnvelope(raw);
   if (!Result.isSuccess(envelope)) return Result.fail(envelope.failure);
-  const decoded = decodeEnrichmentPayload(envelope.success.data);
-  if (Exit.isFailure(decoded)) return Result.fail(decoded.cause);
-  const enrichment = decoded.value;
-  const checks = (enrichment.checks ?? []).flatMap((entry): ReadonlyArray<PullRequestCheck> => {
-    const check = decodeCheckPayload(entry);
-    if (Exit.isFailure(check)) return [];
+  const rows = decodeArrayPayload(envelope.success.data);
+  if (Exit.isFailure(rows)) return Result.fail(rows.cause);
+  const checks: PullRequestCheck[] = [];
+  for (const row of rows.value) {
+    const check = decodeCheckPayload(row);
+    if (Exit.isFailure(check)) continue;
     const name = trimmed(check.value.type) ?? trimmed(check.value.system);
-    if (name === null) return [];
-    return [
-      {
-        name,
-        status: toCheckStatus(check.value.status),
-        description: trimmed(check.value.description),
-        url: trimmed(check.value.system_check_uri),
-      },
-    ];
-  });
-  return Result.succeed({
-    checks,
-    isDraft: enrichment.status?.trim().toLowerCase() === "draft",
-    additions: enrichment.active_diff_set?.patch_stats?.additions ?? 0,
-    deletions: enrichment.active_diff_set?.patch_stats?.deletions ?? 0,
-  });
+    if (name === null) continue;
+    checks.push({
+      name,
+      status: toCheckStatus(check.value.status),
+      description: trimmed(check.value.description),
+      url: trimmed(check.value.system_check_uri),
+    });
+  }
+  return Result.succeed(checks);
 }
 
 // ---------------------------------------------------------------------------
@@ -709,8 +728,10 @@ export interface ArcanumActivity {
 
 /**
  * Arcanum answers one flat array, so threads are reassembled from it: a root with an anchor
- * opens one, and every reply that names it belongs in it. Replies to a root without an anchor
- * stand in the flat conversation, which needs no anchor. Deleted comments and drafts their
+ * opens one, and every reply that names it belongs in it. Every kept comment also stands in
+ * the flat timeline — an anchored one as a review-comment pinned to its path, the way the
+ * GitHub provider reads its review threads into the conversation — because a timeline that
+ * hides the inline remarks counts what it will not show. Deleted comments and drafts their
  * author has not published carry nothing to show.
  */
 export function decodeCommentsJson(
@@ -814,7 +835,22 @@ export function decodeCommentsJson(
       isOutdated: false,
       comments: members.map(toThreadComment),
     });
+    // The same remarks read into the timeline as well, pinned to their file: the diff wants
+    // whole threads and the conversation wants everything said, in one chronological stream.
+    for (const member of members) {
+      comments.push({
+        ...toThreadComment(member),
+        kind: "review-comment",
+        path,
+        reviewState: null,
+      });
+    }
   }
 
-  return Result.succeed({ comments, reviewThreads, commentCount: kept.length });
+  return Result.succeed({
+    // Anchored and plain remarks interleave by instant, not by which thread they came from.
+    comments: comments.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    reviewThreads,
+    commentCount: kept.length,
+  });
 }

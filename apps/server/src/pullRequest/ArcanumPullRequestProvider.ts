@@ -1,5 +1,9 @@
 import * as Effect from "effect/Effect";
-import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
+import type {
+  PullRequestCapabilities,
+  PullRequestCheck,
+  PullRequestViewerPermissions,
+} from "@t3tools/contracts";
 
 import * as ArcanumPullRequestApi from "./ArcanumPullRequestApi.ts";
 import {
@@ -147,13 +151,21 @@ export const make = Effect.gen(function* () {
         const enrichment = yield* api.getPullRequestEnrichment({ number: input.number }).pipe(
           Effect.orElseSucceed(
             (): ArcanumPullRequestEnrichment => ({
-              checks: [],
               isDraft: false,
               additions: 0,
               deletions: 0,
+              diffSetId: null,
             }),
           ),
         );
+        // The check statuses live only on the diff set's own checks — the entity's `checks`
+        // field carries none at all — so they are read by the id the enrichment answered.
+        const checks =
+          enrichment.diffSetId === null
+            ? []
+            : yield* api
+                .getChecks({ number: input.number, diffSetId: enrichment.diffSetId })
+                .pipe(Effect.orElseSucceed((): ReadonlyArray<PullRequestCheck> => []));
         const changedFiles = yield* api.getActiveDiff({ number: input.number }).pipe(
           Effect.flatMap((diff) => api.getChangelist({ number: input.number, diffId: diff.id })),
           Effect.map((changelist) => changelist.length),
@@ -183,7 +195,7 @@ export const make = Effect.gen(function* () {
           mergedAt: detail.mergedAt,
           closedAt: detail.closedAt,
           reviewers: detail.reviewers,
-          checks: enrichment.checks,
+          checks,
           // Nothing here merges, so no strategy is offered either.
           mergeCapabilities: { merge: false, squash: false, rebase: false },
           viewerPermissions: ARCANUM_VIEWER_PERMISSIONS,

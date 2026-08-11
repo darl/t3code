@@ -8,6 +8,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { NonNegativeInt } from "@t3tools/contracts";
 import type {
+  PullRequestCheck,
   PullRequestInvolvement,
   PullRequestListState,
   PullRequestReviewCommentDraft,
@@ -24,6 +25,7 @@ import {
   decodeChangeRequestRowsJsonl,
   decodeChangelistJson,
   decodeCommentsJson,
+  decodeDiffSetChecksJson,
   decodeErrorMessageJson,
   decodePullRequestDetailJson,
   decodePullRequestEnrichmentJson,
@@ -237,8 +239,13 @@ export function isArcanumPullRequestApiError(value: unknown): value is ArcanumPu
 const DETAIL_FIELDS =
   "url,author,summary,description,approvers,assignees,tickets,vcs,created_at,updated_at,closed_at,status,labels,merge_allowed,attention_required";
 
-/** The v1 entity fields carrying what v2 does not: checks, the draft status, and line counts. */
-const ENRICHMENT_FIELDS = "checks,status,active_diff_set(id,patch_stats(additions,deletions))";
+/**
+ * The v1 entity fields carrying what v2 does not: the draft status, the line counts, and the
+ * active diff set's id. The entity's own `checks` are NOT asked for — live-verified
+ * (2026-08-11) to carry no `status` key at all; the statuses live on
+ * `/diff-sets/{diffSetId}/checks`, which `getChecks` reads by that id.
+ */
+const ENRICHMENT_FIELDS = "status,active_diff_set(id,patch_stats(additions,deletions))";
 
 /** The search listing's row fields, verified live (2026-08-10). */
 const SEARCH_FIELDS =
@@ -283,10 +290,16 @@ export class ArcanumPullRequestApi extends Context.Service<
       readonly number: number;
     }) => Effect.Effect<ArcanumPullRequestDetail, ArcanumPullRequestApiError>;
 
-    /** The v1 entity's checks, draft status and line counts, which the v2 detail leaves out. */
+    /** The v1 entity's draft status, line counts and diff set id, which v2 leaves out. */
     readonly getPullRequestEnrichment: (input: {
       readonly number: number;
     }) => Effect.Effect<ArcanumPullRequestEnrichment, ArcanumPullRequestApiError>;
+
+    /** The active diff set's checks — the only place Arcanum reports their statuses. */
+    readonly getChecks: (input: {
+      readonly number: number;
+      readonly diffSetId: string;
+    }) => Effect.Effect<ReadonlyArray<PullRequestCheck>, ArcanumPullRequestApiError>;
 
     readonly getActiveDiff: (input: {
       readonly number: number;
@@ -678,6 +691,16 @@ export const make = Effect.gen(function* () {
         method: "GET",
         path: `/v1/review-requests/${input.number}?fields=${ENRICHMENT_FIELDS}`,
         decode: decodePullRequestEnrichmentJson,
+      }),
+
+    getChecks: (input) =>
+      requestJson({
+        operation: "getChecks",
+        method: "GET",
+        path: `/v1/review-requests/${input.number}/diff-sets/${encodeURIComponent(
+          input.diffSetId,
+        )}/checks`,
+        decode: decodeDiffSetChecksJson,
       }),
 
     getActiveDiff,

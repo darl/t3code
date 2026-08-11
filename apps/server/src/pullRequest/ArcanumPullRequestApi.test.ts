@@ -22,7 +22,7 @@ const BASE_SHA = "a".repeat(40);
 const MERGE_SHA = "b".repeat(40);
 const DETAIL_FIELDS =
   "url,author,summary,description,approvers,assignees,tickets,vcs,created_at,updated_at,closed_at,status,labels,merge_allowed,attention_required";
-const ENRICHMENT_FIELDS = "checks,status,active_diff_set(id,patch_stats(additions,deletions))";
+const ENRICHMENT_FIELDS = "status,active_diff_set(id,patch_stats(additions,deletions))";
 const SEARCH_FIELDS =
   "review_requests(id,url,author(name),summary,vcs(from_branch,to_branch),created_at,updated_at,status,full_status,labels(name),assignees(user(name)),active_diff_set(patch_stats(additions,deletions)))";
 
@@ -401,7 +401,6 @@ layer("ArcanumPullRequestApi.layer", (it) => {
           {
             data: {
               status: "draft",
-              checks: [{ system: "CI", type: "build", status: "success" }],
               active_diff_set: { id: 777, patch_stats: { additions: 5, deletions: 1 } },
             },
           },
@@ -411,13 +410,44 @@ layer("ArcanumPullRequestApi.layer", (it) => {
 
       const enrichment = yield* api.getPullRequestEnrichment({ number: 123456 });
 
-      expect(enrichment).toMatchObject({ isDraft: true, additions: 5, deletions: 1 });
-      expect(enrichment.checks.map((check) => [check.name, check.status])).toEqual([
-        ["build", "success"],
-      ]);
+      expect(enrichment).toEqual({
+        isDraft: true,
+        additions: 5,
+        deletions: 1,
+        diffSetId: "777",
+      });
       assert.strictEqual(
         httpCallAt(0).url,
         `${BASE}/v1/review-requests/123456?fields=${ENRICHMENT_FIELDS}`,
+      );
+    }),
+  );
+
+  it.effect("reads check statuses from the diff set's own checks, by its exact path", () =>
+    Effect.gen(function* () {
+      respondByUrl([
+        [
+          "/diff-sets/777/checks",
+          {
+            data: [
+              { system: "CI", type: "build", status: "running" },
+              { system: "arcanum", type: "approved", status: "pending" },
+            ],
+          },
+        ],
+      ]);
+      const api = yield* ArcanumPullRequestApi.ArcanumPullRequestApi;
+
+      const checks = yield* api.getChecks({ number: 123456, diffSetId: "777" });
+
+      // Running reads as pending; the entity endpoint reports no status at all.
+      expect(checks.map((check) => [check.name, check.status])).toEqual([
+        ["build", "pending"],
+        ["approved", "pending"],
+      ]);
+      assert.strictEqual(
+        httpCallAt(0).url,
+        `${BASE}/v1/review-requests/123456/diff-sets/777/checks`,
       );
     }),
   );

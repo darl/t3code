@@ -8,6 +8,7 @@ import {
   decodeChangeRequestRowsJsonl,
   decodeChangelistJson,
   decodeCommentsJson,
+  decodeDiffSetChecksJson,
   decodeErrorMessageJson,
   decodePullRequestDetailJson,
   decodePullRequestEnrichmentJson,
@@ -315,42 +316,66 @@ describe("decodePullRequestDetailJson", () => {
 });
 
 describe("decodePullRequestEnrichmentJson", () => {
-  it("reads checks, the draft status, and the line counts", () => {
+  it("reads the draft status, the line counts, and the active diff set's id", () => {
     const decoded = expectSuccess(
       decodePullRequestEnrichmentJson(
         JSON.stringify({
           data: {
             status: "draft",
-            checks: [
-              {
-                system: "CI",
-                type: "build",
-                status: "success",
-                description: "all green",
-                system_check_uri: "https://ci.test.local/build/1",
-              },
-              // A nameless check carries nothing to show and is skipped.
-              { status: "failure" },
-            ],
-            active_diff_set: { patch_stats: { additions: 12, deletions: 3 } },
+            active_diff_set: { id: 777, patch_stats: { additions: 12, deletions: 3 } },
           },
         }),
       ),
     );
 
-    expect(decoded).toEqual({
-      isDraft: true,
-      additions: 12,
-      deletions: 3,
-      checks: [
-        {
-          name: "build",
-          status: "success",
-          description: "all green",
-          url: "https://ci.test.local/build/1",
-        },
-      ],
-    });
+    expect(decoded).toEqual({ isDraft: true, additions: 12, deletions: 3, diffSetId: "777" });
+  });
+
+  it("answers a published request as not a draft, with no diff set to name", () => {
+    const decoded = expectSuccess(
+      decodePullRequestEnrichmentJson(JSON.stringify({ data: { status: "published" } })),
+    );
+
+    expect(decoded).toEqual({ isDraft: false, additions: 0, deletions: 0, diffSetId: null });
+  });
+});
+
+describe("decodeDiffSetChecksJson", () => {
+  it("reads the diff set's checks, whose statuses the entity endpoint never carries", () => {
+    // Shaped after the live diff-set checks answer: status rides beside system/type, and the
+    // policy fields around them are simply not read.
+    const decoded = expectSuccess(
+      decodeDiffSetChecksJson(
+        JSON.stringify({
+          data: [
+            {
+              system: "CI",
+              type: "build",
+              status: "success",
+              required: true,
+              restartable: false,
+              disabling_policy: "denied",
+              system_check_id: "1",
+              system_check_uri: "https://ci.test.local/build/1",
+              updated_at: "2026-08-11T14:27:43.002450Z",
+            },
+            { system: "arcanum", type: "approved", status: "pending" },
+            // A nameless check carries nothing to show and is skipped.
+            { status: "failure" },
+          ],
+        }),
+      ),
+    );
+
+    expect(decoded).toEqual([
+      {
+        name: "build",
+        status: "success",
+        description: null,
+        url: "https://ci.test.local/build/1",
+      },
+      { name: "approved", status: "pending", description: null, url: null },
+    ]);
   });
 
   it.each([
@@ -358,6 +383,7 @@ describe("decodePullRequestEnrichmentJson", () => {
     ["failure", "failure"],
     ["error", "failure"],
     ["pending", "pending"],
+    ["running", "pending"],
     ["cancelled", "cancelled"],
     ["skipped", "skipped"],
     ["action_required", "neutral"],
@@ -365,30 +391,22 @@ describe("decodePullRequestEnrichmentJson", () => {
     ["never seen before", "neutral"],
   ])("reads the %s check status as %s", (status, expected) => {
     const decoded = expectSuccess(
-      decodePullRequestEnrichmentJson(
-        JSON.stringify({ data: { checks: [{ type: "lint", status }] } }),
-      ),
+      decodeDiffSetChecksJson(JSON.stringify({ data: [{ type: "lint", status }] })),
     );
 
-    expect(decoded.checks[0]?.status).toBe(expected);
+    expect(decoded[0]?.status).toBe(expected);
   });
 
   it("names a check by its system when it carries no type", () => {
     const decoded = expectSuccess(
-      decodePullRequestEnrichmentJson(
-        JSON.stringify({ data: { checks: [{ system: "arcanum", status: "pending" }] } }),
-      ),
+      decodeDiffSetChecksJson(JSON.stringify({ data: [{ system: "arcanum", status: "pending" }] })),
     );
 
-    expect(decoded.checks[0]?.name).toBe("arcanum");
+    expect(decoded[0]?.name).toBe("arcanum");
   });
 
-  it("answers a published request as not a draft", () => {
-    const decoded = expectSuccess(
-      decodePullRequestEnrichmentJson(JSON.stringify({ data: { status: "published" } })),
-    );
-
-    expect(decoded).toEqual({ isDraft: false, additions: 0, deletions: 0, checks: [] });
+  it("fails when the answer carries no data envelope", () => {
+    expect(Result.isFailure(decodeDiffSetChecksJson('{"error":"nope"}'))).toBe(true);
   });
 });
 
@@ -579,7 +597,6 @@ describe("decodeCommentsJson", () => {
       ),
     );
 
-    expect(decoded.comments).toEqual([]);
     expect(decoded.reviewThreads).toHaveLength(1);
     expect(decoded.reviewThreads[0]).toMatchObject({
       id: "20",
@@ -589,6 +606,17 @@ describe("decodeCommentsJson", () => {
       isResolved: false,
       isOutdated: false,
     });
+    // The same remark also stands in the flat timeline, pinned to its file, so the
+    // conversation shows everything its counter counts.
+    expect(decoded.comments).toHaveLength(1);
+    expect(decoded.comments[0]).toMatchObject({
+      id: "20",
+      kind: "review-comment",
+      path: "project/lib/util.ts",
+      body: "tighten this",
+      reviewState: null,
+    });
+    expect(decoded.commentCount).toBe(1);
   });
 
   it("anchors an old-side thread to the path the file had before", () => {
@@ -662,7 +690,7 @@ describe("decodeCommentsJson", () => {
     expect(decoded.reviewThreads[0]?.isResolved).toBe(expected);
   });
 
-  it("keeps an anchored thread's replies inside it, sorted, and out of the flat timeline", () => {
+  it("keeps an anchored thread's replies inside it, sorted, and in the flat timeline too", () => {
     const decoded = expectSuccess(
       decodeCommentsJson(
         comments([
@@ -690,13 +718,47 @@ describe("decodeCommentsJson", () => {
       ),
     );
 
-    expect(decoded.comments).toEqual([]);
     expect(decoded.reviewThreads[0]?.comments.map((comment) => comment.id)).toEqual([
       "30",
       "31",
       "32",
     ]);
+    // The whole thread also reads into the timeline, so nothing counted stays invisible.
+    expect(decoded.comments.map((comment) => [comment.id, comment.kind])).toEqual([
+      ["30", "review-comment"],
+      ["31", "review-comment"],
+      ["32", "review-comment"],
+    ]);
     expect(decoded.commentCount).toBe(3);
+  });
+
+  it("interleaves anchored and plain remarks by instant in the flat timeline", () => {
+    const decoded = expectSuccess(
+      decodeCommentsJson(
+        comments([
+          {
+            id: 50,
+            content: "first, inline",
+            created_at: "2026-07-01T10:00:00Z",
+            anchor: anchor({}),
+          },
+          { id: 51, content: "second, plain", created_at: "2026-07-01T11:00:00Z" },
+          {
+            id: 52,
+            content: "third, a reply on the thread",
+            created_at: "2026-07-01T12:00:00Z",
+            reply_to_id: 50,
+          },
+        ]),
+        PR_URL,
+      ),
+    );
+
+    expect(decoded.comments.map((comment) => [comment.id, comment.kind])).toEqual([
+      ["50", "review-comment"],
+      ["51", "issue-comment"],
+      ["52", "review-comment"],
+    ]);
   });
 
   it("skips an unreadable entry rather than failing the conversation", () => {
