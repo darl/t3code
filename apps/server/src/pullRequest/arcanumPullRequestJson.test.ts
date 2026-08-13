@@ -556,7 +556,38 @@ describe("decodeCommentsJson", () => {
       url: `${PR_URL}#comment-10`,
       path: null,
     });
+    // A host with no reactions on a remark leaves the field absent, not empty.
+    expect(decoded.comments[0]?.reactions).toBeUndefined();
     expect(decoded.commentCount).toBe(2);
+  });
+
+  it("groups a comment's reactions by content and drops codes outside the eight", () => {
+    const decoded = expectSuccess(
+      decodeCommentsJson(
+        comments([
+          {
+            id: 12,
+            content: "Nice.",
+            created_at: "2026-07-01T10:00:00Z",
+            user: { name: "alice" },
+            reactions: [
+              { code: "+1", user: { name: "bob" } },
+              { code: "+1", user: { name: "carol" } },
+              { code: "tada", user: { name: "bob" } },
+              // A code outside the eight is left out, the way GitLab's awards are.
+              { code: "custom-sticker", user: { name: "bob" } },
+            ],
+          },
+        ]),
+        PR_URL,
+      ),
+    );
+
+    // Read-only until a write endpoint is verified: nothing reads as the viewer's own.
+    expect(decoded.comments[0]?.reactions).toEqual([
+      { content: "thumbs-up", count: 2, actors: ["bob", "carol"], viewerHasReacted: false },
+      { content: "hooray", count: 1, actors: ["bob"], viewerHasReacted: false },
+    ]);
   });
 
   it("skips deleted comments and unpublished drafts", () => {

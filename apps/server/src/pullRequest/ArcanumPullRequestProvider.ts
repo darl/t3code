@@ -26,10 +26,16 @@ const CAPABILITIES: PullRequestCapabilities = {
   // only configures merge settings — nothing here merges, so nothing offers to.
   actions: ["close", "ready"],
   mergeMethods: [],
+  // No `updateMethods`: nothing verified brings an Arcanum branch up to date from here, and a
+  // provider that says nothing offers nothing.
   // The search endpoint's query grammar has atoms for state, author, assignee, label and path
   // — and no free text at all (live-verified 400 "bad filter") — so a query is ignored rather
   // than sent as the wrong filter.
   search: false,
+  // False is the write half: the comments payload carries reactions and they are decoded and
+  // shown read-only, but no endpoint that adds or removes one has been verified, and this one
+  // flag is what offers the picker.
+  reactions: false,
   review: {
     inlineComment: true,
     reply: true,
@@ -42,6 +48,8 @@ const CAPABILITIES: PullRequestCapabilities = {
   // Arcanum assigns reviewers through its own review rules, and nothing verified here lists
   // or writes them, so the page takes no part in it.
   reviewers: { request: false, listCandidates: false },
+  // No `edit`: nothing verified rewrites a summary, a description or a remark on Arcanum, and
+  // a host that says nothing about rewriting is one that cannot.
 };
 
 /**
@@ -327,6 +335,18 @@ export const make = Effect.gen(function* () {
       api
         .replyToThread({ threadId: input.threadId, body: input.body })
         .pipe(Effect.mapError(fail("replyToThread"))),
+
+    // Never called: `capabilities.reactions` is false, and the service refuses without it.
+    // The reactions the conversation carries are read-only until a write endpoint is verified.
+    setReaction: () =>
+      Effect.fail(
+        new PullRequestProviderError({
+          provider: "arcanum",
+          operation: "setReaction",
+          reason: "failed",
+          detail: "Arcanum reactions cannot be written from here yet.",
+        }),
+      ),
 
     setThreadResolution: (input) =>
       api

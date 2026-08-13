@@ -133,6 +133,8 @@ export class ArcanumCliCommandError extends Schema.TaggedErrorClass<ArcanumCliCo
           case "authentication":
             return new ArcanumCliAuthenticationError({ ...context, cause });
           case "not-found":
+          // A rate-limited arc exit is one failed command like any other here, as on GitLab.
+          case "rate-limited":
           case "command-failed":
           case undefined:
             return new ArcanumCliCommandError({ ...context, cause });

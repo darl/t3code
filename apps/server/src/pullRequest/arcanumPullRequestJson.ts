@@ -11,6 +11,8 @@ import type {
   PullRequestComment,
   PullRequestLabel,
   PullRequestMergeability,
+  PullRequestReaction,
+  PullRequestReactionContent,
   PullRequestReviewThread,
   PullRequestState,
   PullRequestThreadComment,
@@ -700,6 +702,64 @@ const RawAnchorSchema = Schema.Struct({
   ),
 });
 
+/**
+ * One reaction as the comments payload spells it: `{code, user}`, one entry per person. The
+ * code vocabulary is matched tolerantly onto the eight contents the contract carries, and
+ * anything outside them is left out rather than shown under a name no picker could take back
+ * — the same doctrine as GitLab's awards.
+ */
+// UNVERIFIED: the reaction code vocabulary; the field shape is live-verified, the spellings
+// below cover the common forms until a live payload settles them.
+const CONTENT_BY_ARCANUM_CODE: Record<string, PullRequestReactionContent> = {
+  "+1": "thumbs-up",
+  thumbs_up: "thumbs-up",
+  thumbsup: "thumbs-up",
+  like: "thumbs-up",
+  "-1": "thumbs-down",
+  thumbs_down: "thumbs-down",
+  thumbsdown: "thumbs-down",
+  dislike: "thumbs-down",
+  laugh: "laugh",
+  laughing: "laugh",
+  smile: "laugh",
+  hooray: "hooray",
+  tada: "hooray",
+  confused: "confused",
+  heart: "heart",
+  rocket: "rocket",
+  eyes: "eyes",
+};
+
+const RawReactionSchema = Schema.Struct({
+  code: Schema.optional(Schema.NullOr(Schema.String)),
+  user: Schema.optional(Schema.NullOr(RawActorSchema)),
+});
+
+const decodeReactionPayload = Schema.decodeUnknownExit(RawReactionSchema);
+
+function toCommentReactions(entries: ReadonlyArray<unknown>): ReadonlyArray<PullRequestReaction> {
+  const groups = new Map<PullRequestReactionContent, { count: number; actors: string[] }>();
+  for (const entry of entries) {
+    const decoded = decodeReactionPayload(entry);
+    if (Exit.isFailure(decoded)) continue;
+    const content = CONTENT_BY_ARCANUM_CODE[trimmed(decoded.value.code)?.toLowerCase() ?? ""];
+    if (content === undefined) continue;
+    const group = groups.get(content) ?? { count: 0, actors: [] };
+    group.count += 1;
+    const actor = trimmed(decoded.value.user?.name);
+    if (actor !== null) group.actors.push(actor);
+    groups.set(content, group);
+  }
+  // Nothing in the payload says which reaction is the reader's, and with no verified write
+  // endpoint there is no pill to press or take back — so none reads as pressed.
+  return [...groups.entries()].map(([content, group]) => ({
+    content,
+    count: group.count,
+    actors: group.actors,
+    viewerHasReacted: false,
+  }));
+}
+
 const RawCommentSchema = Schema.Struct({
   id: Schema.Union([Schema.Int, Schema.String]),
   content: Schema.optional(Schema.NullOr(Schema.String)),
@@ -712,6 +772,7 @@ const RawCommentSchema = Schema.Struct({
   reply_to_id: Schema.optional(Schema.NullOr(Schema.Union([Schema.Int, Schema.String]))),
   /** Verified absent when false, which optional decoding reads correctly. */
   draft: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  reactions: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
   anchor: Schema.optional(Schema.NullOr(RawAnchorSchema)),
 });
 
@@ -777,18 +838,26 @@ export function decodeCommentsJson(
     else bucket.push(comment);
   }
 
-  const toThreadComment = (comment: RawComment): PullRequestThreadComment => ({
-    id: String(comment.id),
-    author:
-      comment.user === null || comment.user === undefined
-        ? null
-        : toActorFromLogin(trimmed(comment.user.name)),
-    body: comment.content ?? "",
-    createdAt: comment.created_at,
-    // UNVERIFIED: whether Arcanum serves a per-comment anchor url; the pull request's own page
-    // with the comment id as a fragment is the simplest address that lands near it.
-    url: `${prUrl}#comment-${String(comment.id)}`,
-  });
+  const toThreadComment = (comment: RawComment): PullRequestThreadComment => {
+    const reactions =
+      comment.reactions === null || comment.reactions === undefined
+        ? undefined
+        : toCommentReactions(comment.reactions);
+    return {
+      id: String(comment.id),
+      author:
+        comment.user === null || comment.user === undefined
+          ? null
+          : toActorFromLogin(trimmed(comment.user.name)),
+      body: comment.content ?? "",
+      createdAt: comment.created_at,
+      // UNVERIFIED: whether Arcanum serves a per-comment anchor url; the pull request's own page
+      // with the comment id as a fragment is the simplest address that lands near it.
+      url: `${prUrl}#comment-${String(comment.id)}`,
+      // Read-only: the reactions ride the payload whether or not the host takes new ones.
+      ...(reactions === undefined ? {} : { reactions }),
+    };
+  };
 
   const comments: PullRequestComment[] = [];
   const reviewThreads: PullRequestReviewThread[] = [];
