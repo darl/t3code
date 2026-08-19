@@ -709,7 +709,13 @@ layer("ArcanumPullRequestApi.layer", (it) => {
         number: 123456,
         verdict: "request-changes",
         body: "Overall notes.",
-        comments: [{ path: "project/lib/util.ts", line: 12, side: "right", body: "tighten this" }],
+        comments: [
+          {
+            path: "project/lib/util.ts",
+            position: { kind: "added", newLine: 12 },
+            body: "tighten this",
+          },
+        ],
       });
 
       const urls = mockedHttp.mock.calls.map((call) => call[0].url);
@@ -749,7 +755,13 @@ layer("ArcanumPullRequestApi.layer", (it) => {
         number: 123456,
         verdict: "comment",
         body: "",
-        comments: [{ path: "project/lib/util.ts", line: 3, side: "left", body: "why remove?" }],
+        comments: [
+          {
+            path: "project/lib/util.ts",
+            position: { kind: "deleted", oldLine: 3 },
+            body: "why remove?",
+          },
+        ],
       });
 
       // A blank summary posts nothing of its own.
@@ -795,11 +807,11 @@ layer("ArcanumPullRequestApi.layer", (it) => {
         comments: [
           {
             // A draft whose paths came from a differently spelled diff still lands: its old
-            // name matches the entry's source.path.
+            // name matches the entry's source.path. An unchanged line selected on the right
+            // copy of a split diff lands on the new side.
             path: "project/lib/after.ts",
             oldPath: "project/lib/before.ts",
-            line: 5,
-            side: "right",
+            position: { kind: "context", oldLine: 4, newLine: 5, side: "right" },
             body: "carried over?",
           },
         ],
@@ -808,6 +820,8 @@ layer("ArcanumPullRequestApi.layer", (it) => {
       expect(bodyOfCall(2)).toMatchObject({
         file_path: "project/lib/after.ts",
         entry_id: 43,
+        diff_line: 5,
+        diff_side: "new",
       });
     }),
   );
@@ -826,7 +840,11 @@ layer("ArcanumPullRequestApi.layer", (it) => {
           verdict: "comment",
           body: "Notes that must not post.",
           comments: [
-            { path: "project/lib/util.ts", line: 12, side: "right", body: "tighten this" },
+            {
+              path: "project/lib/util.ts",
+              position: { kind: "added", newLine: 12 },
+              body: "tighten this",
+            },
           ],
         }),
       );

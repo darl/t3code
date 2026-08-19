@@ -12,6 +12,7 @@ import type {
   PullRequestInvolvement,
   PullRequestListState,
   PullRequestReviewCommentDraft,
+  PullRequestReviewPosition,
   PullRequestReviewVerdict,
 } from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
@@ -403,6 +404,23 @@ function involvementArgs(input: {
       return ["-R", input.viewer];
     case "all":
       return ["--all"];
+  }
+}
+
+/** One diff coordinate as Arcanum spells it: a line number on the old or the new side. */
+function arcanumReviewPosition(position: PullRequestReviewPosition): {
+  readonly line: number;
+  readonly side: "old" | "new";
+} {
+  switch (position.kind) {
+    case "added":
+      return { line: position.newLine, side: "new" };
+    case "deleted":
+      return { line: position.oldLine, side: "old" };
+    case "context":
+      return position.side === "left"
+        ? { line: position.oldLine, side: "old" }
+        : { line: position.newLine, side: "new" };
   }
 }
 
@@ -808,8 +826,9 @@ export const make = Effect.gen(function* () {
           }
           yield* Effect.forEach(
             resolved,
-            ({ draft, entryId }) =>
-              request({
+            ({ draft, entryId }) => {
+              const coordinates = arcanumReviewPosition(draft.position);
+              return request({
                 operation: "submitReview",
                 method: "POST",
                 path: commentsPath,
@@ -818,13 +837,14 @@ export const make = Effect.gen(function* () {
                   draft: false,
                   file_path: draft.path,
                   entry_id: entryId,
-                  diff_line: draft.line,
+                  diff_line: coordinates.line,
                   diff_size: 1,
                   diff_set_xid: String(activeDiff.id),
-                  diff_side: draft.side === "left" ? "old" : "new",
+                  diff_side: coordinates.side,
                   ...(input.verdict === "request-changes" ? { issue_status: "open" } : {}),
                 }),
-              }),
+              });
+            },
             { discard: true },
           );
         }
