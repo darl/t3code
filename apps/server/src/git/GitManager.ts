@@ -1520,7 +1520,16 @@ export const make = Effect.gen(function* () {
       const upstreamBranch = extractBranchNameFromRemoteRef(upstreamRef, {
         remoteName: headContext.remoteName,
       });
-      if (upstreamBranch.length > 0 && upstreamBranch !== branch) {
+      // An arc checkout publishes local branch X as users/<login>/X, so the upstream of every
+      // arc branch is a publish alias of the branch itself — never a merge base. When the
+      // upstream is users/<login>/ plus exactly the local name, skip the stacked-branch
+      // heuristic and fall through to the provider default (trunk on Arcanum). This also
+      // covers a local branch literally named users/<login>/foo, whose alias doubles the
+      // prefix; a genuine stacked base spelled users/<login>/<the local name> is not a
+      // realistic loss.
+      const publishAlias = /^users\/[^/]+\/(.+)$/.exec(upstreamBranch);
+      const isArcPublishAlias = publishAlias?.[1] === branch;
+      if (upstreamBranch.length > 0 && upstreamBranch !== branch && !isArcPublishAlias) {
         return upstreamBranch;
       }
     }

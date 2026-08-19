@@ -2404,6 +2404,161 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("create_pr ignores an arc publish-alias upstream and falls to the default base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "t3code/foo"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "alias.txt"), "alias\n");
+      yield* runGit(repoDir, ["add", "alias.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Alias commit"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "arcadia", remoteDir]);
+      // arc publishes local branch X as users/<login>/X, so on an arc checkout every branch
+      // tracks an upstream spelled exactly like this — an alias of itself, never a base.
+      yield* runGit(repoDir, ["push", "arcadia", "t3code/foo:users/alice/t3code/foo"]);
+      yield* runGit(repoDir, ["fetch", "arcadia"]);
+      yield* runGit(repoDir, ["branch", "--set-upstream-to", "arcadia/users/alice/t3code/foo"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            "[]",
+            "[]",
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 501,
+                title: "Alias branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/501",
+                baseRefName: "main",
+                headRefName: "users/alice/t3code/foo",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      // The alias must never become the merge base — that would open the PR onto its own
+      // branch. The base falls through to the provider default instead ("main" in this
+      // harness; ArcanumCli answers trunk on a real arc checkout). The head keeps the
+      // published name, which is what the alias is for.
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base main --head users/alice/t3code/foo"),
+        ),
+      ).toBe(true);
+      expect(ghCalls.some((call) => call.includes("--base users/alice/t3code/foo"))).toBe(false);
+    }),
+  );
+
+  it.effect("create_pr sees through a doubled publish alias on a users/-named branch", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "users/alice/foo"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "doubled.txt"), "doubled\n");
+      yield* runGit(repoDir, ["add", "doubled.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Doubled alias commit"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "arcadia", remoteDir]);
+      // A local branch literally named users/alice/foo publishes to
+      // users/alice/users/alice/foo, so the alias doubles the prefix.
+      yield* runGit(repoDir, ["push", "arcadia", "users/alice/foo:users/alice/users/alice/foo"]);
+      yield* runGit(repoDir, ["fetch", "arcadia"]);
+      yield* runGit(repoDir, [
+        "branch",
+        "--set-upstream-to",
+        "arcadia/users/alice/users/alice/foo",
+      ]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            "[]",
+            "[]",
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 502,
+                title: "Doubled alias branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/502",
+                baseRefName: "main",
+                headRefName: "users/alice/users/alice/foo",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base main --head users/alice/users/alice/foo"),
+        ),
+      ).toBe(true);
+      expect(ghCalls.some((call) => call.includes("--base users/alice/users/alice/foo"))).toBe(
+        false,
+      );
+    }),
+  );
+
+  it.effect("create_pr still uses a genuinely different upstream as the stacked base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "develop"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "develop"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature-x"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "stacked.txt"), "stacked\n");
+      yield* runGit(repoDir, ["add", "stacked.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Stacked commit"]);
+      yield* runGit(repoDir, ["push", "origin", "feature-x"]);
+      yield* runGit(repoDir, ["branch", "--set-upstream-to", "origin/develop"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            "[]",
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 503,
+                title: "Stacked branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/503",
+                baseRefName: "develop",
+                headRefName: "develop",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      // The publish-alias guard is narrow: an upstream that is not users/<login>/<the local
+      // name> keeps working as the stacked-branch base it always was.
+      expect(ghCalls.some((call) => call.includes("pr create --base develop "))).toBe(true);
+    }),
+  );
+
   it.effect("returns existing PR metadata for commit/push/pr action", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
