@@ -2404,6 +2404,57 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("create_pr targets the remote default branch when it is not main", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      // A repository whose default branch is master, with no main anywhere.
+      yield* runGit(repoDir, ["push", "origin", "HEAD:master"]);
+      yield* runGit(repoDir, ["fetch", "origin"]);
+      yield* runGit(repoDir, ["remote", "set-head", "origin", "master"]);
+
+      yield* runGit(repoDir, ["checkout", "-b", "feature/master-default"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "master-default.txt"), "master default\n");
+      yield* runGit(repoDir, ["add", "master-default.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Master default"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          // Mirrors a provider that cannot report a default branch, as the Azure
+          // DevOps CLI does when it cannot detect the repository.
+          defaultBranch: "",
+          prListSequence: [
+            "[]",
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 505,
+                title: "Master default",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/505",
+                baseRefName: "master",
+                headRefName: "feature/master-default",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base master --head feature/master-default"),
+        ),
+      ).toBe(true);
+    }),
+  );
+
   it.effect("create_pr ignores an arc publish-alias upstream and falls to the default base", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -2511,6 +2562,61 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(ghCalls.some((call) => call.includes("--base users/alice/users/alice/foo"))).toBe(
         false,
       );
+    }),
+  );
+
+  it.effect("an alias upstream composes with the remote default when the provider is silent", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "arcadia", remoteDir]);
+      // The remote records trunk as its default branch, the way an arc-backed remote does.
+      yield* runGit(repoDir, ["push", "arcadia", "main:trunk"]);
+      yield* runGit(repoDir, ["fetch", "arcadia"]);
+      yield* runGit(repoDir, ["remote", "set-head", "arcadia", "trunk"]);
+      yield* runGit(repoDir, ["checkout", "-b", "t3code/bar"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "compose.txt"), "compose\n");
+      yield* runGit(repoDir, ["add", "compose.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Compose commit"]);
+      yield* runGit(repoDir, ["push", "arcadia", "t3code/bar:users/alice/t3code/bar"]);
+      yield* runGit(repoDir, ["fetch", "arcadia"]);
+      yield* runGit(repoDir, ["branch", "--set-upstream-to", "arcadia/users/alice/t3code/bar"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          // A provider with no default branch to report, so the remote's own record decides.
+          defaultBranch: "",
+          prListSequence: [
+            "[]",
+            "[]",
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 504,
+                title: "Compose branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/504",
+                baseRefName: "trunk",
+                headRefName: "users/alice/t3code/bar",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      // The alias never becomes the base, and the fallback chain keeps its order: the
+      // provider default first, then the remote's recorded default — never a bare "main".
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base trunk --head users/alice/t3code/bar"),
+        ),
+      ).toBe(true);
     }),
   );
 
