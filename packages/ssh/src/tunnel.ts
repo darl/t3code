@@ -56,7 +56,10 @@ const SSH_READY_PROBE_TIMEOUT_MS = 1_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
-const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
+// A live server replaying projections after a reconnect can stall its event
+// loop past 2s; failing the reuse probe then kills a healthy server and every
+// agent session it hosts, so the budget must outlast a replay stall.
+const REMOTE_REUSE_READY_TIMEOUT_MS = 20_000;
 
 export interface RemoteT3RunnerOptions {
   readonly packageSpec?: string;
@@ -1457,7 +1460,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         remotePort: entry.remotePort,
       });
       const readinessExit = yield* Effect.exit(
-        waitForHttpReady({ baseUrl: entry.httpBaseUrl, timeoutMs: 2_000 }),
+        // 5s, not 2s: a busy remote server can hold a response past 2s while
+        // its event loop is stalled, and treating that as a dead tunnel tears
+        // the tunnel down and reruns the remote launcher.
+        waitForHttpReady({ baseUrl: entry.httpBaseUrl, timeoutMs: 5_000 }),
       );
       if (Exit.isSuccess(readinessExit)) {
         yield* Effect.logDebug("ssh.environment.tunnel.reused", {
