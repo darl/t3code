@@ -8,8 +8,6 @@ import * as Path from "effect/Path";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import { TestClock } from "effect/testing";
 
-import { ChildProcessSpawner } from "effect/unstable/process";
-
 import * as ProcessRunner from "../processRunner.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 

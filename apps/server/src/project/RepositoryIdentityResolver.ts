@@ -87,6 +87,14 @@ function buildRepositoryIdentity(input: {
   };
 }
 
+/** What git says about a folder outside any checkout, which is what an arc mount looks like. */
+function isNotGitRepository(result: {
+  readonly code: number | null;
+  readonly stderr: string;
+}): boolean {
+  return result.code === 128 || result.stderr.toLowerCase().includes("not a git repository");
+}
+
 const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.resolveCacheKey")(
   function* (cwd: string) {
     const processRunner = yield* ProcessRunner.ProcessRunner;
@@ -101,7 +109,13 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.
       })
       .pipe(Effect.option);
     if (topLevelResult._tag === "None" || topLevelResult.value.code !== 0) {
-      return null;
+      // Only a folder git calls "not a repository" is worth asking arc about: an
+      // arc mount answers exactly that, and without a key here its identity is
+      // never read at all. A transient git failure stays a miss, so the next
+      // call retries git rather than settling on an arc answer.
+      return topLevelResult._tag === "Some" && isNotGitRepository(topLevelResult.value)
+        ? yield* resolveArcadiaRoot(cwd)
+        : null;
     }
 
     const candidate = topLevelResult.value.stdout.trim();
@@ -111,6 +125,26 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.
 
 /** How every Arcadia working copy names its remote; the whole monorepo is the one repository. */
 const ARCADIA_REMOTE_URL = "arc://arcadia/arcadia";
+
+/** The arc mount root, or null outside a mount: `arc root` prints only inside one. */
+const resolveArcadiaRoot = Effect.fn("RepositoryIdentityResolver.resolveArcadiaRoot")(function* (
+  cwd: string,
+): Effect.fn.Return<string | null, never, ProcessRunner.ProcessRunner> {
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const rootResult = yield* processRunner
+    .run({
+      command: "arc",
+      args: ["root"],
+      cwd,
+      timeoutBehavior: "timedOutResult",
+    })
+    .pipe(Effect.option);
+  if (rootResult._tag === "None" || rootResult.value.code !== 0) {
+    return null;
+  }
+  const rootPath = rootResult.value.stdout.trim();
+  return rootPath.length > 0 ? rootPath : null;
+});
 
 /**
  * The one identity every Arcadia checkout shares, whichever probe discovered it. Both roads —
@@ -150,23 +184,10 @@ function arcadiaIdentity(input: {
 const resolveArcadiaIdentity = Effect.fn("RepositoryIdentityResolver.resolveArcadia")(function* (
   cacheKey: string,
 ): Effect.fn.Return<RepositoryIdentity | null, never, ProcessRunner.ProcessRunner> {
-  const processRunner = yield* ProcessRunner.ProcessRunner;
-  const rootResult = yield* processRunner
-    .run({
-      command: "arc",
-      args: ["root"],
-      cwd: cacheKey,
-      timeoutBehavior: "timedOutResult",
-    })
-    .pipe(Effect.option);
-  if (rootResult._tag === "None" || rootResult.value.code !== 0) {
-    return null;
-  }
-  const rootPath = rootResult.value.stdout.trim();
-  if (rootPath.length === 0) {
-    return null;
-  }
-  return arcadiaIdentity({ remoteName: "arcadia", remoteUrl: ARCADIA_REMOTE_URL, rootPath });
+  const rootPath = yield* resolveArcadiaRoot(cacheKey);
+  return rootPath === null
+    ? null
+    : arcadiaIdentity({ remoteName: "arcadia", remoteUrl: ARCADIA_REMOTE_URL, rootPath });
 });
 
 const resolveRepositoryIdentityFromCacheKey = Effect.fn(
