@@ -107,7 +107,8 @@ path** and **Open in file viewer**. These actions are available in expanded prev
 On mobile, touch and hold an inline image or use a preview's **Media actions** menu to see its
 source, copy the path or URL, or choose **Save or share**. Workspace media can open in the file
 viewer from the same menu. Saving downloads a copy only when you request it; it does not change
-how the video buffers during playback.
+how the video buffers during playback. On iOS, touch and hold a file reference in a message to
+copy its full or relative path or open it in the file viewer.
 
 Use Markdown image syntax to embed either kind of media:
 
@@ -194,6 +195,8 @@ such as System, Personal, Project, or App.
 
 On mobile, these menus are available on the **New task** screen before you start a thread. They
 use the skills and commands from the selected environment and provider.
+
+In an existing thread, send `/compact` to reduce context usage. Web and desktop also offer this action from the context meter, and the work log records token counts when the provider reports them.
 
 By default, the `/` menu includes skills. To keep this menu command-only, turn off **Show skills in
 slash menu** in **Settings → General**. Skill results use the `/skill:Skill Name` label and add the
