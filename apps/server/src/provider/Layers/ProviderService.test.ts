@@ -172,18 +172,6 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       Effect.void,
   );
 
-  const compactThread = vi.fn((threadId: ThreadId) =>
-    Effect.sync(() =>
-      emit({
-        type: "thread.state.changed",
-        eventId: asEventId("evt-native-compact"),
-        provider,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        threadId,
-        payload: { state: "compacted" },
-      }),
-    ),
-  );
   const respondToRequest = vi.fn(
     (
       _threadId: ThreadId,
@@ -200,20 +188,18 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     ): Effect.Effect<void, ProviderAdapterError> => Effect.void,
   );
 
-  const stopSession = vi.fn(
-    (threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> =>
-      Effect.sync(() => {
-        sessions.delete(threadId);
-      }),
+  const stopSession = vi.fn((threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> =>
+    Effect.sync(() => {
+      sessions.delete(threadId);
+    }),
   );
 
-  const listSessions = vi.fn(
-    (): Effect.Effect<ReadonlyArray<ProviderSession>> =>
-      Effect.sync(() => Array.from(sessions.values())),
+  const listSessions = vi.fn((): Effect.Effect<ReadonlyArray<ProviderSession>> =>
+    Effect.sync(() => Array.from(sessions.values())),
   );
 
-  const hasSession = vi.fn(
-    (threadId: ThreadId): Effect.Effect<boolean> => Effect.succeed(sessions.has(threadId)),
+  const hasSession = vi.fn((threadId: ThreadId): Effect.Effect<boolean> =>
+    Effect.succeed(sessions.has(threadId)),
   );
 
   const readThread = vi.fn(
@@ -247,11 +233,10 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       Effect.succeed({ feedbackId: `feedback-${input.threadId}` }),
   );
 
-  const stopAll = vi.fn(
-    (): Effect.Effect<void, ProviderAdapterError> =>
-      Effect.sync(() => {
-        sessions.clear();
-      }),
+  const stopAll = vi.fn((): Effect.Effect<void, ProviderAdapterError> =>
+    Effect.sync(() => {
+      sessions.clear();
+    }),
   );
 
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
@@ -262,7 +247,6 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     },
     startSession,
     sendTurn,
-    ...(provider === CODEX_DRIVER ? { compactThread } : {}),
     interruptTurn,
     respondToRequest,
     respondToUserInput,
@@ -299,7 +283,6 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     updateSession,
     startSession,
     sendTurn,
-    compactThread,
     interruptTurn,
     respondToRequest,
     respondToUserInput,
@@ -1048,10 +1031,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
 
-      yield* advanceTestClock(10);
-      yield* provider.compactThread(session.threadId);
-      assert.deepEqual(routing.codex.compactThread.mock.calls, [[session.threadId, undefined]]);
-
       yield* provider.interruptTurn({ threadId: session.threadId });
       assert.deepEqual(routing.codex.interruptTurn.mock.calls, [[session.threadId, undefined]]);
 
@@ -1112,40 +1091,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.threadId, session.threadId);
       }
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
-    }),
-  );
-
-  it.effect("marks a successful fallback compaction as compacted", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService.ProviderService;
-      const threadId = asThreadId("thread-compact-cursor");
-      yield* provider.startSession(threadId, {
-        provider: CURSOR_DRIVER,
-        providerInstanceId: ProviderInstanceId.make("cursor"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-      const compactedEventFiber = yield* provider.streamEvents.pipe(
-        Stream.filter((event) => event.type === "thread.state.changed"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-      const compactFiber = yield* provider.compactThread(threadId).pipe(Effect.forkChild);
-      yield* advanceTestClock(50);
-      routing.cursor.emit({
-        type: "turn.completed",
-        eventId: asEventId("evt-cursor-compact-completed"),
-        provider: CURSOR_DRIVER,
-        createdAt: "2026-01-01T00:00:01.000Z",
-        threadId,
-        turnId: asTurnId(`turn-${threadId}`),
-        payload: { state: "completed" },
-      });
-      yield* Fiber.join(compactFiber);
-
-      const compacted = yield* Fiber.join(compactedEventFiber);
-      assert.equal(compacted._tag, "Some");
-      yield* provider.stopSession({ threadId });
     }),
   );
 
