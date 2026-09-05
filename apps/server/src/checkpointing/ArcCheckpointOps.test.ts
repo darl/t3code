@@ -19,7 +19,7 @@ const ARC_HEAD = "0123456789abcdef0123456789abcdef01234567";
 
 /**
  * A fake arc mount: a temp dir carrying `.arc/HEAD` and no git anywhere, plus a probe whose
- * `arc status` answer the test sets by hand. Real git backs the shadow repository.
+ * `arc status` / `arc show` answers the test sets by hand. Real git backs the shadow repo.
  */
 function makeMount() {
   return Effect.gen(function* () {
@@ -33,22 +33,50 @@ function makeMount() {
       NodePath.join(root, ".arc", "HEAD"),
       "ref: refs/heads/trunk\n",
     );
-    const changed = new Set<string>();
+    /** path → tracked, as `arc status` would report right now. */
+    const status = new Map<string, boolean>();
+    /** path → bytes at arc HEAD, as `arc show HEAD:path` would answer. */
+    const pristine = new Map<string, string>();
+    const pristineReads: string[] = [];
     const probeLayer = Layer.succeed(ArcCheckpointOps.ArcCheckpointProbe, {
-      readChangedPaths: () => Effect.succeed([...changed]),
+      readChangedEntries: () =>
+        Effect.succeed([...status.entries()].map(([path, tracked]) => ({ path, tracked }))),
       readHead: () => Effect.succeed(ARC_HEAD),
+      readFileAtHead: ({ path }) =>
+        Effect.sync(() => {
+          pristineReads.push(path);
+          const contents = pristine.get(path);
+          return contents === undefined ? null : new TextEncoder().encode(contents);
+        }),
     });
     const { ops } = yield* ArcCheckpointOps.make({ shadowRootDir: shadowRoot }).pipe(
       Effect.provide(probeLayer),
     );
-    const write = (relativePath: string, contents: string) =>
-      fileSystem.writeFileString(NodePath.join(root, relativePath), contents);
-    const read = (relativePath: string) =>
-      fileSystem.readFileString(NodePath.join(root, relativePath));
-    const exists = (relativePath: string) => fileSystem.exists(NodePath.join(root, relativePath));
-    const remove = (relativePath: string) =>
-      fileSystem.remove(NodePath.join(root, relativePath), { force: true });
-    return { root, shadowRoot, changed, ops, write, read, exists, remove };
+    return {
+      root,
+      shadowRoot,
+      ops,
+      pristineReads,
+      /** A tracked file with the given content at arc HEAD, now reported as changed. */
+      track: (path: string, pristineContents: string) => {
+        status.set(path, true);
+        pristine.set(path, pristineContents);
+      },
+      /** An untracked or newly added file, which arc HEAD knows nothing about. */
+      create: (path: string) => {
+        status.set(path, false);
+      },
+      /** arc no longer reports anything changed. */
+      clearStatus: () => {
+        status.clear();
+      },
+      write: (relativePath: string, contents: string) =>
+        fileSystem.writeFileString(NodePath.join(root, relativePath), contents),
+      read: (relativePath: string) => fileSystem.readFileString(NodePath.join(root, relativePath)),
+      exists: (relativePath: string) => fileSystem.exists(NodePath.join(root, relativePath)),
+      remove: (relativePath: string) =>
+        fileSystem.remove(NodePath.join(root, relativePath), { force: true }),
+    };
   });
 }
 
@@ -56,10 +84,10 @@ const threadId = ThreadId.make("thread-arc-checkpoints");
 const turn = (count: number) => checkpointRefForThreadTurn(threadId, count);
 
 it.layer(TestLayer)("ArcCheckpointOps", (it) => {
-  describe("parseArcStatusPaths", () => {
-    it.effect("reads files from every status section, dropping directories and repeats", () =>
+  describe("parseArcStatusEntries", () => {
+    it.effect("reads files from every section, marking new and untracked ones as such", () =>
       Effect.sync(() => {
-        const paths = ArcCheckpointOps.parseArcStatusPaths(
+        const entries = ArcCheckpointOps.parseArcStatusEntries(
           // @effect-diagnostics-next-line preferSchemaOverJson:off
           JSON.stringify({
             status: {
@@ -67,6 +95,7 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
               changed: [
                 { status: "modified", type: "file", path: "project/lib/util.ts" },
                 { status: "modified", type: "file", path: "project/lib/new.ts" },
+                { status: "deleted", type: "file", path: "project/lib/old.ts" },
               ],
               untracked: [
                 { status: "untracked", type: "directory", path: "project/scratch" },
@@ -76,12 +105,14 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
           }),
         );
 
-        expect(paths).toEqual([
-          "project/lib/new.ts",
-          "project/lib/util.ts",
-          "project/scratch/notes.txt",
+        expect(entries).toEqual([
+          // Staged as new, so arc HEAD has no copy even though it is also modified.
+          { path: "project/lib/new.ts", tracked: false },
+          { path: "project/lib/old.ts", tracked: true },
+          { path: "project/lib/util.ts", tracked: true },
+          { path: "project/scratch/notes.txt", tracked: false },
         ]);
-        expect(ArcCheckpointOps.parseArcStatusPaths("not json")).toEqual([]);
+        expect(ArcCheckpointOps.parseArcStatusEntries("not json")).toEqual([]);
       }),
     );
   });
@@ -96,8 +127,8 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
 
         yield* mount.write("a.txt", "two\n");
         yield* mount.write("b.txt", "new\n");
-        mount.changed.add("a.txt");
-        mount.changed.add("b.txt");
+        mount.track("a.txt", "one\n");
+        mount.create("b.txt");
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(1) });
 
         const patch = yield* mount.ops.diffCheckpoints({
@@ -115,6 +146,7 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
         });
 
         expect(patch).toContain("diff --git a/a.txt b/a.txt");
+        expect(patch).toContain("-one");
         expect(patch).toContain("+two");
         expect(patch).toContain("diff --git a/b.txt b/b.txt");
         expect(patch).toContain("new file mode");
@@ -132,12 +164,12 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
       Effect.gen(function* () {
         const mount = yield* makeMount();
         yield* mount.write("a.txt", "two\n");
-        mount.changed.add("a.txt");
+        mount.track("a.txt", "one\n");
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(1) });
 
         // Back to its arc HEAD content: arc no longer lists it, but it is still on disk.
         yield* mount.write("a.txt", "one\n");
-        mount.changed.clear();
+        mount.clearStatus();
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(2) });
 
         const patch = yield* mount.ops.diffCheckpoints({
@@ -153,14 +185,15 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
       }),
     );
 
-    it.effect("reads a file removed from disk as a deletion", () =>
+    it.effect("reads a new file removed from disk as a deletion", () =>
       Effect.gen(function* () {
         const mount = yield* makeMount();
         yield* mount.write("b.txt", "new\n");
-        mount.changed.add("b.txt");
+        mount.create("b.txt");
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(1) });
 
         yield* mount.remove("b.txt");
+        mount.clearStatus();
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(2) });
 
         const patch = yield* mount.ops.diffCheckpoints({
@@ -179,7 +212,7 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
       Effect.gen(function* () {
         const mount = yield* makeMount();
         yield* mount.write("a.txt", "one\n");
-        mount.changed.add("a.txt");
+        mount.create("a.txt");
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(3) });
         yield* mount.write("a.txt", "two\n");
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(4) });
@@ -198,18 +231,143 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
     );
   });
 
+  describe("pristine seeding", () => {
+    it.effect("a tracked file first modified in a turn diffs as a hunk, not a whole-file add", () =>
+      Effect.gen(function* () {
+        const mount = yield* makeMount();
+        yield* mount.write("a.txt", "one\n");
+        yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(1) });
+
+        yield* mount.write("a.txt", "two\n");
+        mount.track("a.txt", "one\n");
+        yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(2) });
+
+        const numstat = yield* mount.ops.diffCheckpoints({
+          cwd: mount.root,
+          fromCheckpointRef: turn(1),
+          toCheckpointRef: turn(2),
+          ignoreWhitespace: false,
+          format: "numstat",
+        });
+        const patch = yield* mount.ops.diffCheckpoints({
+          cwd: mount.root,
+          fromCheckpointRef: turn(1),
+          toCheckpointRef: turn(2),
+          ignoreWhitespace: false,
+        });
+
+        // One line replaced one line: the pristine copy was seeded into turn 1.
+        expect(numstat).toContain("1\t1\t");
+        expect(patch).toContain("-one");
+        expect(patch).toContain("+two");
+        expect(patch).not.toContain("new file mode");
+        expect(mount.pristineReads).toEqual(["a.txt"]);
+      }),
+    );
+
+    it.effect("a tracked file first deleted in a turn shows as a deletion", () =>
+      Effect.gen(function* () {
+        const mount = yield* makeMount();
+        yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(1) });
+
+        // Gone from disk; arc reports it as a tracked deletion.
+        mount.track("gone.txt", "gone\n");
+        yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(2) });
+
+        const patch = yield* mount.ops.diffCheckpoints({
+          cwd: mount.root,
+          fromCheckpointRef: turn(1),
+          toCheckpointRef: turn(2),
+          ignoreWhitespace: false,
+        });
+
+        expect(patch).toContain("deleted file mode");
+        expect(patch).toContain("-gone");
+      }),
+    );
+
+    it.effect("an untracked new file is not seeded and still reads as an add", () =>
+      Effect.gen(function* () {
+        const mount = yield* makeMount();
+        yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(1) });
+
+        yield* mount.write("n.txt", "fresh\n");
+        mount.create("n.txt");
+        yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(2) });
+
+        const patch = yield* mount.ops.diffCheckpoints({
+          cwd: mount.root,
+          fromCheckpointRef: turn(1),
+          toCheckpointRef: turn(2),
+          ignoreWhitespace: false,
+        });
+
+        expect(patch).toContain("new file mode");
+        expect(patch).toContain("+fresh");
+        expect(mount.pristineReads).toEqual([]);
+      }),
+    );
+
+    it.effect(
+      "seeds every earlier snapshot, so restoring to one writes the pristine file back",
+      () =>
+        Effect.gen(function* () {
+          const mount = yield* makeMount();
+          yield* mount.write("a.txt", "one\n");
+          yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(1) });
+          yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(2) });
+
+          yield* mount.write("a.txt", "three\n");
+          mount.track("a.txt", "one\n");
+          yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(3) });
+
+          // Turns 1 and 2 both hold the pristine copy now: nothing changed between them, and
+          // the first touch reads as a hunk from either.
+          expect(
+            yield* mount.ops.diffCheckpoints({
+              cwd: mount.root,
+              fromCheckpointRef: turn(1),
+              toCheckpointRef: turn(2),
+              ignoreWhitespace: false,
+            }),
+          ).toBe("");
+          const patch = yield* mount.ops.diffCheckpoints({
+            cwd: mount.root,
+            fromCheckpointRef: turn(1),
+            toCheckpointRef: turn(3),
+            ignoreWhitespace: false,
+          });
+          expect(patch).toContain("-one");
+          expect(patch).toContain("+three");
+          // Only one arc read for the whole thread, whatever the number of earlier turns.
+          expect(mount.pristineReads).toEqual(["a.txt"]);
+
+          // Restoring to turn 1 used to delete the file; now it puts the pristine bytes back.
+          const restored = yield* mount.ops.restoreCheckpoint({
+            cwd: mount.root,
+            checkpointRef: turn(1),
+          });
+          expect(restored).toBe(true);
+          expect(yield* mount.read("a.txt")).toBe("one\n");
+          expect(
+            yield* mount.ops.hasCheckpointRef({ cwd: mount.root, checkpointRef: turn(2) }),
+          ).toBe(true);
+        }),
+    );
+  });
+
   describe("restoreCheckpoint", () => {
     it.effect("writes touched files back, removes later additions, leaves the rest alone", () =>
       Effect.gen(function* () {
         const mount = yield* makeMount();
         yield* mount.write("a.txt", "v1\n");
         yield* mount.write("u.txt", "keep\n");
-        mount.changed.add("a.txt");
+        mount.track("a.txt", "v0\n");
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(1) });
 
         yield* mount.write("a.txt", "v2\n");
         yield* mount.write("c.txt", "later\n");
-        mount.changed.add("c.txt");
+        mount.create("c.txt");
         yield* mount.ops.captureCheckpoint({ cwd: mount.root, checkpointRef: turn(2) });
 
         const restored = yield* mount.ops.restoreCheckpoint({
@@ -228,7 +386,7 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
       Effect.gen(function* () {
         const mount = yield* makeMount();
         yield* mount.write("a.txt", "v1\n");
-        mount.changed.add("a.txt");
+        mount.track("a.txt", "v0\n");
 
         const restored = yield* mount.ops.restoreCheckpoint({
           cwd: mount.root,

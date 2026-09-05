@@ -28,7 +28,11 @@ const VcsDriverTestLayer = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProcess
 /** What `arc status` would report per mount root; tests set it before capturing. */
 const arcChangedPaths = new Map<string, ReadonlyArray<string>>();
 const ArcProbeStubLayer = Layer.succeed(ArcCheckpointOps.ArcCheckpointProbe, {
-  readChangedPaths: (mountRoot) => Effect.succeed(arcChangedPaths.get(mountRoot) ?? []),
+  readChangedEntries: (mountRoot) =>
+    Effect.succeed(
+      (arcChangedPaths.get(mountRoot) ?? []).map((path) => ({ path, tracked: false })),
+    ),
+  readFileAtHead: () => Effect.succeed(null),
   readHead: () => Effect.succeed("0123456789abcdef0123456789abcdef01234567"),
 });
 const CheckpointStoreTestLayer = CheckpointStore.layer.pipe(

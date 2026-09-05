@@ -13,6 +13,11 @@
  * - The mount is never scanned through git. The changed set comes from `arc status --json`,
  *   and only paths in the thread's touched set are ever added.
  *
+ * A tracked file touched for the first time in a turn was pristine in every earlier snapshot
+ * of the thread, but none of them held it. Its pristine bytes are fetched once from arc and
+ * seeded into those earlier snapshots, so the turn's diff is a hunk (or a deletion) rather
+ * than a whole-file add — or, for a deletion, nothing at all.
+ *
  * @module ArcCheckpointOps
  */
 import * as NodeCrypto from "node:crypto";
@@ -23,6 +28,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import { PATCH_RENDER_PREFIX_ARGS } from "../vcs/GitVcsDriverCore.ts";
 import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
@@ -36,29 +44,46 @@ const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 /** The well-known id of git's empty tree, the "nothing touched yet" snapshot. */
 const EMPTY_TREE_OID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+/** One entry of `arc status`: where it is, and whether arc HEAD holds a version of it. */
+export interface ArcChangedEntry {
+  readonly path: string;
+  /** False for an untracked or newly added file, which has no pristine copy to seed. */
+  readonly tracked: boolean;
+}
+
 /**
  * What the arc side of a checkpoint needs to know about the mount. A service so tests can
- * answer `arc status` without running arc, while real git backs the shadow repository.
+ * answer arc without running it, while real git backs the shadow repository.
  */
 export class ArcCheckpointProbe extends Context.Service<
   ArcCheckpointProbe,
   {
-    /** Root-relative paths of every changed, staged or untracked file in the mount. */
-    readonly readChangedPaths: (
+    /** Every changed, staged or untracked file in the mount, root-relative. */
+    readonly readChangedEntries: (
       mountRoot: string,
-    ) => Effect.Effect<ReadonlyArray<string>, VcsError>;
+    ) => Effect.Effect<ReadonlyArray<ArcChangedEntry>, VcsError>;
     /** The arc commit the mount is at, or null when arc cannot say. */
     readonly readHead: (mountRoot: string) => Effect.Effect<string | null>;
+    /** A file's bytes at an arc commit, or null when that commit has no such file. */
+    readonly readFileAtHead: (input: {
+      readonly mountRoot: string;
+      readonly head: string;
+      readonly path: string;
+    }) => Effect.Effect<Uint8Array | null>;
   }
 >()("t3/checkpointing/ArcCheckpointOps/ArcCheckpointProbe") {}
+
+/** Statuses arc gives a file that arc HEAD does not hold. */
+const UNTRACKED_STATUSES = new Set(["untracked", "new file"]);
 
 /**
  * The `arc status --json` shape: `{"status": {"changed"|"staged"|"untracked": [{status, type,
  * path}]}}`, paths relative to the mount root. arc never reports renames, so a moved file
  * arrives as one deleted and one new entry already. Only files are returned; a directory
- * entry (arc lists untracked directories) is not something a tree can hold.
+ * entry (arc lists untracked directories) is not something a tree can hold. A path is tracked
+ * only when no section calls it new or untracked.
  */
-export function parseArcStatusPaths(stdoutJson: string): ReadonlyArray<string> {
+export function parseArcStatusEntries(stdoutJson: string): ReadonlyArray<ArcChangedEntry> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdoutJson);
@@ -67,25 +92,41 @@ export function parseArcStatusPaths(stdoutJson: string): ReadonlyArray<string> {
   }
   const status = (parsed as { status?: Record<string, unknown> } | null)?.status;
   if (!status || typeof status !== "object") return [];
-  const paths = new Set<string>();
+  const trackedByPath = new Map<string, boolean>();
   for (const section of Object.values(status)) {
     if (!Array.isArray(section)) continue;
     for (const item of section) {
-      const entry = item as { path?: unknown; type?: unknown } | null;
+      const entry = item as { path?: unknown; type?: unknown; status?: unknown } | null;
       if (typeof entry?.path !== "string" || entry.path.length === 0) continue;
       if (entry.type === "directory") continue;
-      paths.add(entry.path);
+      const tracked =
+        typeof entry.status === "string" ? !UNTRACKED_STATUSES.has(entry.status) : true;
+      trackedByPath.set(entry.path, (trackedByPath.get(entry.path) ?? true) && tracked);
     }
   }
-  return [...paths].sort();
+  return [...trackedByPath.entries()]
+    .map(([path, tracked]) => ({ path, tracked }))
+    .toSorted((left, right) => (left.path < right.path ? -1 : 1));
+}
+
+function concatBytes(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 export const probeLayer = Layer.effect(
   ArcCheckpointProbe,
   Effect.gen(function* () {
     const vcsProcess = yield* VcsProcess.VcsProcess;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     return ArcCheckpointProbe.of({
-      readChangedPaths: (mountRoot) =>
+      readChangedEntries: (mountRoot) =>
         vcsProcess
           .run({
             operation: "ArcCheckpointOps.arcStatus",
@@ -95,7 +136,7 @@ export const probeLayer = Layer.effect(
             timeoutMs: ARC_STATUS_TIMEOUT_MS,
             maxOutputBytes: ARC_STATUS_MAX_OUTPUT_BYTES,
           })
-          .pipe(Effect.map((output) => parseArcStatusPaths(output.stdout))),
+          .pipe(Effect.map((output) => parseArcStatusEntries(output.stdout))),
       readHead: (mountRoot) =>
         vcsProcess
           .run({
@@ -116,6 +157,22 @@ export const probeLayer = Layer.effect(
             }),
             Effect.orElseSucceed(() => null),
           ),
+      // Straight through the spawner rather than the text-decoding process runner: the
+      // bytes go into git as they are, which is what keeps a binary file intact.
+      readFileAtHead: (input) =>
+        Effect.gen(function* () {
+          const child = yield* spawner.spawn(
+            ChildProcess.make("arc", ["show", `${input.head}:${input.path}`], {
+              cwd: input.mountRoot,
+            }),
+          );
+          const chunks = yield* Stream.runCollect(child.stdout);
+          const exitCode = yield* child.exitCode;
+          return exitCode === 0 ? concatBytes(chunks) : null;
+        }).pipe(
+          Effect.scoped,
+          Effect.orElseSucceed(() => null),
+        ),
     });
   }),
 );
@@ -267,19 +324,22 @@ export const make = Effect.fn("ArcCheckpointOps.make")(function* (input: ArcChec
     GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
   });
 
-  const resolveCommit = (shadowDir: string, ref: string) =>
+  const resolveObject = (shadowDir: string, revision: string) =>
     shadowGit(
-      "ArcCheckpointOps.resolveCommit",
+      "ArcCheckpointOps.resolveObject",
       shadowDir,
-      ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+      ["rev-parse", "--verify", "--quiet", revision],
       { allowNonZeroExit: true },
     ).pipe(
       Effect.map((result) => {
         if (result.exitCode !== 0) return null;
-        const commit = result.stdout.trim();
-        return commit.length > 0 ? commit : null;
+        const oid = result.stdout.trim();
+        return oid.length > 0 ? oid : null;
       }),
     );
+
+  const resolveCommit = (shadowDir: string, ref: string) =>
+    resolveObject(shadowDir, `${ref}^{commit}`);
 
   /** Every earlier snapshot of the thread a ref belongs to, oldest turn first. */
   const listThreadSnapshots = Effect.fn("ArcCheckpointOps.listThreadSnapshots")(function* (
@@ -310,23 +370,18 @@ export const make = Effect.fn("ArcCheckpointOps.make")(function* (input: ArcChec
       treeish,
     ]).pipe(Effect.map((result) => splitNul(result.stdout)));
 
-  /**
-   * The thread's touched set: what arc reports changed now, plus every path any earlier
-   * snapshot of the thread held. A file put back to its pristine content still exists on
-   * disk, so carrying it forward makes a revert read as a change back rather than a deletion.
-   */
-  const touchedPaths = Effect.fn("ArcCheckpointOps.touchedPaths")(function* (
+  /** Every path any of the given snapshots holds. */
+  const snapshotPaths = Effect.fn("ArcCheckpointOps.snapshotPaths")(function* (
     shadowDir: string,
-    mountRoot: string,
     snapshots: ReadonlyArray<ThreadSnapshot>,
   ) {
-    const touched = new Set<string>(yield* probe.readChangedPaths(mountRoot));
+    const paths = new Set<string>();
     for (const snapshot of snapshots) {
       for (const treePath of yield* treePaths(shadowDir, snapshot.commit)) {
-        touched.add(treePath);
+        paths.add(treePath);
       }
     }
-    return [...touched].sort();
+    return paths;
   });
 
   const isFileOnDisk = (absolutePath: string) =>
@@ -335,15 +390,21 @@ export const make = Effect.fn("ArcCheckpointOps.make")(function* (input: ArcChec
       Effect.orElseSucceed(() => false),
     );
 
+  const withTempFile = <A, E>(
+    shadowDir: string,
+    prefix: string,
+    use: (tempPath: string) => Effect.Effect<A, E>,
+  ) => {
+    const tempPath = path.join(shadowDir, `${prefix}-${NodeCrypto.randomUUID()}`);
+    return use(tempPath).pipe(
+      Effect.ensuring(fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore)),
+    );
+  };
+
   const withTempIndex = <A, E>(
     shadowDir: string,
     use: (tempIndexPath: string) => Effect.Effect<A, E>,
-  ) => {
-    const tempIndexPath = path.join(shadowDir, `t3-checkpoint-index-${NodeCrypto.randomUUID()}`);
-    return use(tempIndexPath).pipe(
-      Effect.ensuring(fileSystem.remove(tempIndexPath, { force: true }).pipe(Effect.ignore)),
-    );
-  };
+  ) => withTempFile(shadowDir, "t3-checkpoint-index", use);
 
   /**
    * A tree of the touched paths as they are on disk right now. A touched path missing from
@@ -392,13 +453,131 @@ export const make = Effect.fn("ArcCheckpointOps.make")(function* (input: ArcChec
     );
   });
 
-  const recordedHeadOf = (shadowDir: string, commit: string) =>
-    shadowGit("ArcCheckpointOps.recordedHead", shadowDir, ["show", "-s", "--format=%B", commit], {
+  const commitMessageOf = (shadowDir: string, commit: string) =>
+    shadowGit("ArcCheckpointOps.commitMessage", shadowDir, ["show", "-s", "--format=%B", commit], {
       allowNonZeroExit: true,
     }).pipe(
-      Effect.map((result) => /arc-head=(\S+)/.exec(result.stdout)?.[1] ?? null),
-      Effect.orElseSucceed(() => null),
+      Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : "")),
+      Effect.orElseSucceed(() => ""),
     );
+
+  const recordedHeadOf = (shadowDir: string, commit: string) =>
+    commitMessageOf(shadowDir, commit).pipe(
+      Effect.map((message) => /arc-head=(\S+)/.exec(message)?.[1] ?? null),
+    );
+
+  /** Stores bytes as a blob in the shadow repository; the file route keeps them byte-exact. */
+  const storeBlob = (operation: string, shadowDir: string, bytes: Uint8Array) =>
+    withTempFile(shadowDir, "t3-seed", (tempPath) =>
+      Effect.gen(function* () {
+        yield* fileSystem.writeFile(tempPath, bytes).pipe(
+          Effect.mapError(
+            (cause) =>
+              new VcsProcessExitError({
+                operation,
+                command: "git hash-object",
+                cwd: shadowDir,
+                exitCode: 1,
+                detail: `Could not stage a pristine blob: ${cause.message}`,
+              }),
+          ),
+        );
+        const result = yield* shadowGit(operation, shadowDir, [
+          "hash-object",
+          "-w",
+          "--",
+          tempPath,
+        ]);
+        return result.stdout.trim();
+      }),
+    );
+
+  /**
+   * Pristine blobs for tracked paths the thread touches for the first time this turn, read
+   * once from arc at the head the previous snapshot recorded. A path arc has no copy of at
+   * that head — or one arc cannot read — is simply not seeded.
+   */
+  const pristineSeeds = Effect.fn("ArcCheckpointOps.pristineSeeds")(function* (
+    operation: string,
+    shadowDir: string,
+    mountRoot: string,
+    entries: ReadonlyArray<ArcChangedEntry>,
+    snapshots: ReadonlyArray<ThreadSnapshot>,
+    earlierPaths: ReadonlySet<string>,
+  ) {
+    const seeds = new Map<string, string>();
+    const previous = snapshots.at(-1);
+    if (previous === undefined) return seeds;
+    const newlyTouched = entries.filter((entry) => entry.tracked && !earlierPaths.has(entry.path));
+    if (newlyTouched.length === 0) return seeds;
+    const head =
+      (yield* recordedHeadOf(shadowDir, previous.commit)) ?? (yield* probe.readHead(mountRoot));
+    if (head === null) return seeds;
+    for (const entry of newlyTouched) {
+      const bytes = yield* probe.readFileAtHead({ mountRoot, head, path: entry.path });
+      if (bytes === null) continue;
+      seeds.set(entry.path, yield* storeBlob(operation, shadowDir, bytes));
+    }
+    return seeds;
+  });
+
+  /**
+   * Writes the seeded blobs into every earlier snapshot of the thread, which is where the
+   * files stood pristine all along. Each rewritten snapshot keeps its message and is
+   * re-parented onto the rewritten one before it, so the chain stays one thread.
+   */
+  const seedEarlierSnapshots = Effect.fn("ArcCheckpointOps.seedEarlierSnapshots")(function* (
+    operation: string,
+    shadowDir: string,
+    snapshots: ReadonlyArray<ThreadSnapshot>,
+    seeds: ReadonlyMap<string, string>,
+  ) {
+    const rewritten: ThreadSnapshot[] = [];
+    let previousCommit: string | null = null;
+    for (const snapshot of snapshots) {
+      const originalTree = yield* resolveObject(shadowDir, `${snapshot.commit}^{tree}`);
+      const originalParent = yield* resolveObject(shadowDir, `${snapshot.commit}^1`);
+      const seededTree = yield* withTempIndex(shadowDir, (tempIndexPath) =>
+        Effect.gen(function* () {
+          const indexEnv = { GIT_INDEX_FILE: tempIndexPath };
+          yield* shadowGit(operation, shadowDir, ["read-tree", snapshot.commit], { env: indexEnv });
+          for (const [seedPath, blob] of seeds) {
+            yield* shadowGit(
+              operation,
+              shadowDir,
+              ["update-index", "--add", "--cacheinfo", `100644,${blob},${seedPath}`],
+              { env: indexEnv },
+            );
+          }
+          const writeTree = yield* shadowGit(operation, shadowDir, ["write-tree"], {
+            env: indexEnv,
+          });
+          return writeTree.stdout.trim();
+        }),
+      );
+      let commit = snapshot.commit;
+      if (seededTree !== originalTree || previousCommit !== originalParent) {
+        const message = yield* commitMessageOf(shadowDir, snapshot.commit);
+        const commitTree = yield* shadowGit(
+          operation,
+          shadowDir,
+          [
+            "commit-tree",
+            seededTree,
+            ...(previousCommit === null ? [] : ["-p", previousCommit]),
+            "-m",
+            message,
+          ],
+          { env: commitEnv() },
+        );
+        commit = commitTree.stdout.trim();
+        yield* shadowGit(operation, shadowDir, ["update-ref", snapshot.ref, commit]);
+      }
+      rewritten.push({ ...snapshot, commit });
+      previousCommit = commit;
+    }
+    return rewritten;
+  });
 
   const captureCheckpoint: VcsCheckpointOps["captureCheckpoint"] = Effect.fn(
     "ArcCheckpointOps.captureCheckpoint",
@@ -406,8 +585,26 @@ export const make = Effect.fn("ArcCheckpointOps.make")(function* (input: ArcChec
     const operation = "ArcCheckpointOps.captureCheckpoint";
     const mountRoot = yield* requireMountRoot(operation, input.cwd);
     const shadowDir = yield* ensureShadow(mountRoot);
-    const snapshots = yield* listThreadSnapshots(shadowDir, input.checkpointRef);
-    const touched = yield* touchedPaths(shadowDir, mountRoot, snapshots);
+    const entries = yield* probe.readChangedEntries(mountRoot);
+    let snapshots = yield* listThreadSnapshots(shadowDir, input.checkpointRef);
+    const earlierPaths = yield* snapshotPaths(shadowDir, snapshots);
+
+    const seeds = yield* pristineSeeds(
+      operation,
+      shadowDir,
+      mountRoot,
+      entries,
+      snapshots,
+      earlierPaths,
+    );
+    if (seeds.size > 0) {
+      snapshots = yield* seedEarlierSnapshots(operation, shadowDir, snapshots, seeds);
+    }
+
+    // The thread's touched set: what arc reports changed now, plus every path any earlier
+    // snapshot held. A file put back to its pristine content still exists on disk, so
+    // carrying it forward makes a revert read as a change back rather than a deletion.
+    const touched = [...new Set([...entries.map((entry) => entry.path), ...earlierPaths])].sort();
     const treeOid = yield* snapshotTree(operation, shadowDir, mountRoot, touched);
     const arcHead = (yield* probe.readHead(mountRoot)) ?? "unknown";
     // The previous turn's snapshot is the parent, so the shadow history reads as the thread.
@@ -454,13 +651,15 @@ export const make = Effect.fn("ArcCheckpointOps.make")(function* (input: ArcChec
     const shadowDir = yield* ensureShadow(mountRoot);
     const targetCommit = yield* resolveCommit(shadowDir, input.checkpointRef);
     // There is no HEAD to fall back to: the pristine content of a touched file lives in arc,
-    // which the shadow repository never read. A missing ref is reported as not restored.
+    // which the shadow repository only ever reads for seeding. A missing ref is not restored.
     if (targetCommit === null) {
       return false;
     }
 
+    const entries = yield* probe.readChangedEntries(mountRoot);
     const snapshots = yield* listThreadSnapshots(shadowDir, input.checkpointRef);
-    const touched = yield* touchedPaths(shadowDir, mountRoot, snapshots);
+    const earlierPaths = yield* snapshotPaths(shadowDir, snapshots);
+    const touched = [...new Set([...entries.map((entry) => entry.path), ...earlierPaths])].sort();
     const nowTree = yield* snapshotTree(operation, shadowDir, mountRoot, touched);
     const nowPaths = new Set(yield* treePaths(shadowDir, nowTree));
     const targetPaths = new Set(yield* treePaths(shadowDir, targetCommit));
