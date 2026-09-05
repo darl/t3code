@@ -16,7 +16,9 @@
 import { VcsUnsupportedOperationError, type CheckpointRef } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 
 import type { CheckpointStoreError } from "./Errors.ts";
 import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
@@ -100,6 +102,8 @@ export class CheckpointStore extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   const resolveCheckpoints = Effect.fn("CheckpointStore.resolveCheckpoints")(function* (
     operation: string,
@@ -116,10 +120,26 @@ export const make = Effect.gen(function* () {
     return handle.driver.checkpoints satisfies VcsCheckpointOps;
   });
 
-  const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = (cwd) =>
-    vcsRegistry
-      .detect({ cwd, requestedKind: "git" })
-      .pipe(Effect.map((repository) => repository !== null));
+  // An arc mount answers git detection through the arc-git shim, but checkpoints
+  // are git object-database plumbing (read-tree/write-tree/commit-tree in a
+  // temporary index) that arc cannot serve, so every capture would fail with
+  // exit 128 and surface as a "checkpoint capture failed" activity per turn.
+  // The mount root carries .arc/HEAD (the same marker the shim keys on); a plain
+  // git worktree never does.
+  const isArcMount = (rootPath: string) =>
+    fileSystem
+      .exists(path.join(rootPath, ".arc", "HEAD"))
+      .pipe(Effect.catch(() => Effect.succeed(false)));
+
+  const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = Effect.fn(
+    "CheckpointStore.isGitRepository",
+  )(function* (cwd) {
+    const handle = yield* vcsRegistry.detect({ cwd, requestedKind: "git" });
+    if (handle === null) {
+      return false;
+    }
+    return !(yield* isArcMount(handle.repository.rootPath));
+  });
 
   const captureCheckpoint: CheckpointStore["Service"]["captureCheckpoint"] = Effect.fn(
     "captureCheckpoint",

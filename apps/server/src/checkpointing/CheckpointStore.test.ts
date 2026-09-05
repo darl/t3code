@@ -114,6 +114,22 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
         expect(yield* checkpointStore.isGitRepository(tmp)).toBe(true);
       }),
     );
+
+    it.effect("returns false for an arc mount even though git detection succeeds", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* fileSystem.makeDirectory(NodePath.join(tmp, ".arc"));
+        yield* fileSystem.writeFileString(
+          NodePath.join(tmp, ".arc", "HEAD"),
+          "ref: refs/heads/trunk\n",
+        );
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+
+        expect(yield* checkpointStore.isGitRepository(tmp)).toBe(false);
+      }),
+    );
   });
 
   describe("diffCheckpoints", () => {
