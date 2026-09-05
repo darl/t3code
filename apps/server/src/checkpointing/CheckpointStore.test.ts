@@ -14,6 +14,7 @@ import { describe, expect } from "vite-plus/test";
 
 import { checkpointRefForThreadTurn } from "./Utils.ts";
 import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
+import * as ArcCheckpointOps from "./ArcCheckpointOps.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -24,7 +25,14 @@ const ServerConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
 });
 const VcsProcessTestLayer = VcsProcess.layer.pipe(Layer.provide(NodeServices.layer));
 const VcsDriverTestLayer = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProcessTestLayer));
+/** What `arc status` would report per mount root; tests set it before capturing. */
+const arcChangedPaths = new Map<string, ReadonlyArray<string>>();
+const ArcProbeStubLayer = Layer.succeed(ArcCheckpointOps.ArcCheckpointProbe, {
+  readChangedPaths: (mountRoot) => Effect.succeed(arcChangedPaths.get(mountRoot) ?? []),
+  readHead: () => Effect.succeed("0123456789abcdef0123456789abcdef01234567"),
+});
 const CheckpointStoreTestLayer = CheckpointStore.layer.pipe(
+  Layer.provide(ArcProbeStubLayer),
   Layer.provideMerge(VcsDriverTestLayer),
   Layer.provideMerge(NodeServices.layer),
 );
@@ -88,6 +96,20 @@ function initRepoWithCommit(
   });
 }
 
+/** The marker an arc mount root carries; no git anywhere, which is the point. */
+function markArcMount(
+  root: string,
+): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  return Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    yield* fileSystem.makeDirectory(NodePath.join(root, ".arc"), { recursive: true });
+    yield* fileSystem.writeFileString(
+      NodePath.join(root, ".arc", "HEAD"),
+      "ref: refs/heads/trunk\n",
+    );
+  });
+}
+
 function buildLargeText(lineCount = 5_000): string {
   return Array.from({ length: lineCount }, (_, index) => `line ${String(index).padStart(5, "0")}`)
     .join("\n")
@@ -115,19 +137,65 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
       }),
     );
 
-    it.effect("returns false for an arc mount even though git detection succeeds", () =>
+    it.effect("returns true for an arc mount, which the shadow repository serves", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* markArcMount(tmp);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+
+        expect(yield* checkpointStore.isGitRepository(tmp)).toBe(true);
+      }),
+    );
+  });
+
+  describe("arc routing", () => {
+    it.effect("captures and diffs an arc mount through the shadow repository", () =>
+      Effect.gen(function* () {
+        // No .git anywhere: nothing here may depend on git reading the mount.
+        const tmp = yield* makeTmpDir();
+        yield* markArcMount(tmp);
+        yield* writeTextFile(NodePath.join(tmp, "notes.txt"), "draft\n");
+        arcChangedPaths.set(tmp, ["notes.txt"]);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("thread-arc-routing");
+        const fromCheckpointRef = checkpointRefForThreadTurn(threadId, 0);
+        const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: fromCheckpointRef });
+        yield* writeTextFile(NodePath.join(tmp, "notes.txt"), "final\n");
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: toCheckpointRef });
+
+        const diff = yield* checkpointStore.diffCheckpoints({
+          cwd: tmp,
+          fromCheckpointRef,
+          toCheckpointRef,
+          ignoreWhitespace: false,
+        });
+
+        expect(diff).toContain("diff --git a/notes.txt b/notes.txt");
+        expect(diff).toContain("-draft");
+        expect(diff).toContain("+final");
+        expect(
+          yield* checkpointStore.hasCheckpointRef({ cwd: tmp, checkpointRef: toCheckpointRef }),
+        ).toBe(true);
+        // The shadow repository lives under the server state dir, never inside the mount.
+        const fileSystem = yield* FileSystem.FileSystem;
+        expect(yield* fileSystem.exists(NodePath.join(tmp, ".git"))).toBe(false);
+      }),
+    );
+
+    it.effect("keeps a plain git repository on the git driver's checkpoints", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
-        const fileSystem = yield* FileSystem.FileSystem;
-        yield* fileSystem.makeDirectory(NodePath.join(tmp, ".arc"));
-        yield* fileSystem.writeFileString(
-          NodePath.join(tmp, ".arc", "HEAD"),
-          "ref: refs/heads/trunk\n",
-        );
         const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("thread-git-routing");
+        const checkpointRef = checkpointRefForThreadTurn(threadId, 0);
 
-        expect(yield* checkpointStore.isGitRepository(tmp)).toBe(false);
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef });
+
+        // The git driver writes the hidden ref into the repository's own object store.
+        expect(yield* git(tmp, ["rev-parse", "--verify", checkpointRef])).toMatch(/^[0-9a-f]{40}$/);
       }),
     );
   });
