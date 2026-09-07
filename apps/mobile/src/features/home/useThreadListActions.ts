@@ -5,6 +5,7 @@ import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
 import { Alert } from "react-native";
 
+import { withThreadDismissal } from "./thread-dismissal";
 import { showConfirmDialog } from "../../components/ConfirmDialogHost";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
@@ -12,6 +13,7 @@ import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { beginPendingThreadOrder, getPendingThreadOrder } from "../../state/thread-order";
 import { createPendingThreadOrder, createThreadMovePlanner } from "../threads/threadOrder";
@@ -130,26 +132,30 @@ function useThreadActionExecutor(
           );
           return false;
         }
-        const result =
-          action === "unsettle"
-            ? // reason "user" pins the thread active: auto-settle stays
-              // suppressed until real activity clears the pin server-side.
-              await unsettleMutation({
-                environmentId: thread.environmentId,
-                input: { threadId: thread.id, reason: "user" },
-              })
-            : await (
-                action === "settle"
-                  ? settleMutation
-                  : action === "archive"
-                    ? archiveMutation
-                    : action === "unarchive"
-                      ? unarchiveMutation
-                      : deleteMutation
-              )({
-                environmentId: thread.environmentId,
-                input: { threadId: thread.id },
-              });
+        const result = await withThreadDismissal(
+          key,
+          async () =>
+            action === "unsettle"
+              ? // reason "user" pins the thread active: auto-settle stays
+                // suppressed until real activity clears the pin server-side.
+                await unsettleMutation({
+                  environmentId: thread.environmentId,
+                  input: { threadId: thread.id, reason: "user" },
+                })
+              : await (
+                  action === "settle"
+                    ? settleMutation
+                    : action === "archive"
+                      ? archiveMutation
+                      : action === "unarchive"
+                        ? unarchiveMutation
+                        : deleteMutation
+                )({
+                  environmentId: thread.environmentId,
+                  input: { threadId: thread.id },
+                }),
+          (result) => result._tag === "Success",
+        );
         if (result._tag === "Failure") {
           Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
           return false;
@@ -274,13 +280,18 @@ export function useThreadListActions(): {
         }
 
         selectionHaptic();
-        const result = await snoozeMutation({
-          environmentId: thread.environmentId,
-          input: {
-            threadId: thread.id,
-            snoozedUntil,
-          },
-        });
+        const result = await withThreadDismissal(
+          key,
+          () =>
+            snoozeMutation({
+              environmentId: thread.environmentId,
+              input: {
+                threadId: thread.id,
+                snoozedUntil,
+              },
+            }),
+          (result) => result._tag === "Success",
+        );
         if (result._tag === "Failure") {
           const error = Cause.squash(result.cause);
           Alert.alert(
@@ -315,10 +326,15 @@ export function useThreadListActions(): {
         }
 
         selectionHaptic();
-        const result = await unsnoozeMutation({
-          environmentId: thread.environmentId,
-          input: { threadId: thread.id, reason: "user" },
-        });
+        const result = await withThreadDismissal(
+          key,
+          () =>
+            unsnoozeMutation({
+              environmentId: thread.environmentId,
+              input: { threadId: thread.id, reason: "user" },
+            }),
+          (result) => result._tag === "Success",
+        );
         if (result._tag === "Failure") {
           const error = Cause.squash(result.cause);
           Alert.alert(
@@ -480,6 +496,7 @@ export function useThreadListActions(): {
         threads: shells,
         section,
         now: new Date().toISOString(),
+        queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
         settlementEnvironmentIds: new Set(
           [...configs].flatMap(([id, config]) =>
             config.environment.capabilities.threadSettlement === true ? [id] : [],

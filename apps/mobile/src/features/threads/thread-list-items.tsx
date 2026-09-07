@@ -8,7 +8,7 @@ import type { EnvironmentMachineKind } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { SymbolView } from "../../components/AppSymbol";
 import { memo, useCallback, useMemo, type ComponentProps } from "react";
-import { Pressable, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import Svg, { Circle, Path } from "react-native-svg";
@@ -27,6 +27,7 @@ import { useThreadPr, type ThreadPrPresentation } from "../../state/use-thread-p
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
+import { QueuedMessageIcon } from "./queued-message-icon";
 import { resolveThreadStatus } from "./threadPresentation";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
@@ -440,6 +441,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly thread: EnvironmentThreadShell;
   readonly environmentLabel: string | null;
   readonly environmentMachine?: EnvironmentMachineKind;
+  /** A message for this thread is waiting in the outbox. */
+  readonly hasQueuedMessages?: boolean;
   readonly searchMatch?: EnvironmentThreadSearchMatch;
   readonly searchQuery?: string;
   readonly isLast: boolean;
@@ -450,6 +453,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly titleRegenerationSupported: boolean;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
@@ -473,14 +477,26 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const selectedBackgroundColor = theme["--color-user-bubble"];
   const selectedForegroundColor = theme["--color-user-bubble-foreground"];
 
-  const { thread, onSelectThread, onArchiveThread, onDeleteThread, onRegenerateThreadTitle } =
-    props;
+  const {
+    thread,
+    onSelectThread,
+    onArchiveThread,
+    onDeleteThread,
+    onRegenerateThreadTitle,
+    onNewThreadOnBranch,
+  } = props;
   const status = resolveThreadStatus(thread);
   const pr = useThreadPr(thread);
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
-  const threadAccessibilityLabel = pr ? `${thread.title}, ${pr.accessibilityLabel}` : thread.title;
+  const threadAccessibilityLabel = [
+    thread.title,
+    pr?.accessibilityLabel,
+    props.hasQueuedMessages ? "messages queued to send" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
   const subtitleParts = [props.environmentLabel, thread.branch].filter((part): part is string =>
     Boolean(part),
   );
@@ -506,6 +522,16 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   );
   const menuActions = useMemo<MenuAction[]>(
     () => [
+      ...(thread.branch
+        ? [
+            {
+              id: "new-thread-on-branch",
+              title:
+                Platform.OS === "ios" ? "New thread on branch" : `New thread on ${thread.branch}`,
+              image: "square.and.pencil",
+            },
+          ]
+        : []),
       THREAD_ROW_MENU_ACTIONS[0]!,
       ...buildThreadTitleRegenerationMenuItems({
         supported: props.titleRegenerationSupported,
@@ -513,7 +539,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       }),
       THREAD_ROW_MENU_ACTIONS[1]!,
     ],
-    [props.titleRegenerationSupported, thread.titleRegeneration],
+    [props.titleRegenerationSupported, thread.branch, thread.titleRegeneration],
   );
   const primaryAction = useMemo(
     () => ({
@@ -526,11 +552,12 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [handleArchive, handleDelete, handleRegenerateTitle],
+    [handleArchive, handleDelete, handleRegenerateTitle, onNewThreadOnBranch, thread],
   );
 
   const statusPill = effectiveStatus ? (
@@ -611,6 +638,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                 {thread.title}
               </Text>
               <View className="flex-row items-center gap-2">
+                {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
                 {statusPill}
                 <Text className="text-base tabular-nums text-foreground-tertiary">{timestamp}</Text>
                 <SymbolView
@@ -670,6 +698,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
               {thread.title}
             </Text>
             <View className="flex-row items-center gap-2">
+              {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
               {statusPill}
               <Text
                 className={cn(
@@ -696,6 +725,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
 
   return (
     <ThreadSwipeable
+      threadKey={`${thread.environmentId}:${thread.id}`}
       backgroundColor={backgroundColor}
       containerStyle={
         compact ? undefined : { borderRadius: SIDEBAR_ROW_RADIUS, overflow: "hidden" }
