@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+import * as Clock from "effect/Clock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { VcsProcessExitError } from "@t3tools/contracts";
 
@@ -53,23 +56,46 @@ const layer = ArcanumCli.layer.pipe(
 const argsOf = (call: unknown[]) => (call[0] as { args: ReadonlyArray<string> }).args;
 const arcCalls = () => mockRun.mock.calls.map((call) => argsOf(call).join(" "));
 
-/** Routes each arc command to a canned answer, so a test states only what it cares about. */
+/**
+ * Routes each arc command to a canned answer, so a test states only what it cares about.
+ * The route runs when the command executes, not when its effect is built, the way a real
+ * process spawn would — the gate holds a built command back, and the counts must see that.
+ */
 function answer(
   routes: Record<string, () => Effect.Effect<VcsProcess.VcsProcessOutput, VcsProcessExitError>>,
 ) {
-  mockRun.mockImplementation((input) => {
-    const key = input.args.slice(0, 2).join(" ");
-    const route = routes[key] ?? routes[input.args.join(" ")];
-    if (route === undefined) {
-      return Effect.die(new Error(`unexpected arc command: ${input.args.join(" ")}`));
-    }
-    return route();
-  });
+  mockRun.mockImplementation((input) =>
+    Effect.suspend(() => {
+      const key = input.args.slice(0, 2).join(" ");
+      const route = routes[key] ?? routes[input.args.join(" ")];
+      if (route === undefined) {
+        return Effect.die(new Error(`unexpected arc command: ${input.args.join(" ")}`));
+      }
+      return route();
+    }),
+  );
 }
 
 afterEach(() => {
   mockRun.mockReset();
 });
+
+/** Lets every runnable fiber reach its next sleep or gate before the clock moves. */
+const settle = Effect.forEach(Array.from({ length: 25 }), () => Effect.yieldNow, {
+  discard: true,
+});
+
+/** Runs the lookups while the test clock steps through the pacing slots between arc calls. */
+const paced = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(effect);
+    for (let step = 0; step < 60; step += 1) {
+      yield* settle;
+      yield* TestClock.adjust(`${ArcanumCli.MIN_API_SPACING_MS} millis`);
+    }
+    yield* settle;
+    return yield* Fiber.join(fiber);
+  });
 
 describe("ArcanumCli.listPullRequests", () => {
   it.effect("answers from the outgoing sweep without probing the branch", () =>
@@ -80,11 +106,9 @@ describe("ArcanumCli.listPullRequests", () => {
       });
 
       const arc = yield* ArcanumCli.ArcanumCli;
-      const found = yield* arc.listPullRequests({
-        cwd: CWD,
-        headBranch: "feature-x",
-        state: "all",
-      });
+      const found = yield* paced(
+        arc.listPullRequests({ cwd: CWD, headBranch: "feature-x", state: "all" }),
+      );
 
       expect(found.map((pr) => pr.number)).toEqual([123456]);
       expect(arcCalls().filter((call) => call.startsWith("pr status"))).toEqual([]);
@@ -104,10 +128,12 @@ describe("ArcanumCli.listPullRequests", () => {
       });
 
       const arc = yield* ArcanumCli.ArcanumCli;
-      const results = yield* Effect.forEach(
-        ["one", "two", "one"],
-        (headBranch) => arc.listPullRequests({ cwd: CWD, headBranch, state: "all" }),
-        { concurrency: "unbounded" },
+      const results = yield* paced(
+        Effect.forEach(
+          ["one", "two", "one"],
+          (headBranch) => arc.listPullRequests({ cwd: CWD, headBranch, state: "all" }),
+          { concurrency: "unbounded" },
+        ),
       );
 
       expect(results.map((found) => found.map((pr) => [pr.number, pr.state]))).toEqual([
@@ -129,11 +155,9 @@ describe("ArcanumCli.listPullRequests", () => {
       });
 
       const arc = yield* ArcanumCli.ArcanumCli;
-      const found = yield* arc.listPullRequests({
-        cwd: CWD,
-        headBranch: "feature-x",
-        state: "all",
-      });
+      const found = yield* paced(
+        arc.listPullRequests({ cwd: CWD, headBranch: "feature-x", state: "all" }),
+      );
 
       expect(found).toEqual([]);
       expect(arcCalls().filter((call) => call.startsWith("pr status"))).toEqual([
@@ -153,11 +177,9 @@ describe("ArcanumCli.listPullRequests", () => {
       });
 
       const arc = yield* ArcanumCli.ArcanumCli;
-      const found = yield* arc.listPullRequests({
-        cwd: CWD,
-        headBranch: "users/bob/shared",
-        state: "open",
-      });
+      const found = yield* paced(
+        arc.listPullRequests({ cwd: CWD, headBranch: "users/bob/shared", state: "open" }),
+      );
 
       expect(found.map((pr) => pr.number)).toEqual([42]);
       expect(arcCalls().filter((call) => call.startsWith("pr status"))).toEqual([
@@ -175,40 +197,86 @@ describe("ArcanumCli.listPullRequests", () => {
       });
 
       const arc = yield* ArcanumCli.ArcanumCli;
-      const error = yield* arc
-        .listPullRequests({ cwd: CWD, headBranch: "feature-x", state: "all" })
-        .pipe(Effect.flip);
+      const error = yield* paced(
+        arc.listPullRequests({ cwd: CWD, headBranch: "feature-x", state: "all" }).pipe(Effect.flip),
+      );
 
       expect(error._tag).toBe("ArcanumCliRateLimitError");
       expect(arcCalls().filter((call) => call.startsWith("pr status"))).toEqual([]);
     }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("runs Arcanum reads one at a time", () =>
+  it.effect("spaces Arcanum reads apart instead of bursting", () =>
     Effect.gen(function* () {
-      let inFlight = 0;
-      let peak = 0;
+      const startedAt: number[] = [];
       answer({
         "user-info": () => Effect.succeed(output("Effective login: alice\n")),
         "pr list": () => Effect.succeed(output("")),
         "pr status": () =>
           Effect.gen(function* () {
-            inFlight += 1;
-            peak = Math.max(peak, inFlight);
-            yield* Effect.yieldNow;
-            inFlight -= 1;
+            startedAt.push(yield* Clock.currentTimeMillis);
             return yield* Effect.fail(exitError("not-found", "no pull request"));
           }),
       });
 
       const arc = yield* ArcanumCli.ArcanumCli;
-      yield* Effect.forEach(
-        ["a", "b", "c", "d"],
-        (headBranch) => arc.listPullRequests({ cwd: CWD, headBranch, state: "all" }),
-        { concurrency: "unbounded" },
+      yield* paced(
+        Effect.forEach(
+          ["a", "b", "c"],
+          (headBranch) => arc.listPullRequests({ cwd: CWD, headBranch, state: "all" }),
+          { concurrency: "unbounded" },
+        ),
       );
 
-      expect(peak).toBe(1);
+      expect(startedAt).toHaveLength(6);
+      for (let index = 1; index < startedAt.length; index += 1) {
+        expect(startedAt[index]! - startedAt[index - 1]!).toBeGreaterThanOrEqual(
+          ArcanumCli.MIN_API_SPACING_MS,
+        );
+      }
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("pauses every reader after a 429 so queued lookups retry once the limit clears", () =>
+    Effect.gen(function* () {
+      let sweeps = 0;
+      answer({
+        "user-info": () => Effect.succeed(output("Effective login: alice\n")),
+        "pr list": () => {
+          sweeps += 1;
+          return sweeps === 1
+            ? Effect.fail(exitError("rate-limited", "API rate limit exceeded."))
+            : Effect.succeed(output(`${prJson()}\n`));
+        },
+      });
+
+      const arc = yield* ArcanumCli.ArcanumCli;
+      const fiber = yield* Effect.forkChild(
+        Effect.forEach(
+          ["feature-x", "feature-x"],
+          (headBranch) =>
+            arc.listPullRequests({ cwd: CWD, headBranch, state: "all" }).pipe(
+              Effect.map((found) => found.map((pr) => pr.number)),
+              Effect.catchTag("ArcanumCliRateLimitError", () => Effect.succeed("rate-limited")),
+            ),
+          { concurrency: "unbounded" },
+        ),
+      );
+      // login at once, then the first sweep a spacing later: it fails with a 429
+      yield* settle;
+      yield* TestClock.adjust(`${ArcanumCli.MIN_API_SPACING_MS} millis`);
+      yield* settle;
+      expect(sweeps).toBe(1);
+      // the second caller waits out the cooldown rather than sweeping at once
+      yield* TestClock.adjust(`${ArcanumCli.RATE_LIMIT_COOLDOWN_MS - 1} millis`);
+      yield* settle;
+      expect(sweeps).toBe(1);
+      yield* TestClock.adjust("1 millis");
+      yield* settle;
+      const results = yield* Fiber.join(fiber);
+
+      expect(sweeps).toBe(2);
+      expect(results).toEqual(["rate-limited", [123456]]);
     }).pipe(Effect.provide(layer)),
   );
 });

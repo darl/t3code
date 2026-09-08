@@ -1,9 +1,11 @@
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -31,6 +33,14 @@ const OUTGOING_PR_SWEEP_LIMIT = 100;
 // The login never changes for the life of the server process; an hour keeps
 // a token rotation from going unnoticed for long.
 const LOGIN_TTL_MS = 60 * 60_000;
+// Arcanum answers 429 to a second request inside roughly a second, and a
+// burst keeps the limit tripped: of six parallel `arc pr status` calls one
+// gets through. Reads are therefore spaced MIN_API_SPACING_MS apart, and a
+// 429 pauses every reader for RATE_LIMIT_COOLDOWN_MS so the callers already
+// queued retry after the limit clears instead of each burning a request
+// against it.
+export const MIN_API_SPACING_MS = 1_500;
+export const RATE_LIMIT_COOLDOWN_MS = 10_000;
 
 const arcanumCliExecutionErrorContext = {
   operation: Schema.Literal("execute"),
@@ -309,12 +319,32 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  // Arcanum allows roughly one API request a second. Every PR read below
-  // passes through this gate, so a server start that looks up dozens of
+  // Every PR read below passes through this gate one at a time and no
+  // sooner than the slot allows, so a server start that looks up dozens of
   // worktree branches at once queues its calls instead of bursting into
   // rate-limit failures that each back off for minutes.
   const apiGate = yield* Semaphore.make(1);
-  const gated = apiGate.withPermits(1);
+  const nextApiSlotMillis = yield* Ref.make(0);
+  const holdApiSlot = (millis: number) =>
+    Clock.currentTimeMillis.pipe(Effect.flatMap((now) => Ref.set(nextApiSlotMillis, now + millis)));
+  const gated = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
+    apiGate.withPermits(1)(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const slot = yield* Ref.get(nextApiSlotMillis);
+        if (slot > now) yield* Effect.sleep(Duration.millis(slot - now));
+        return yield* effect.pipe(
+          Effect.tap(() => holdApiSlot(MIN_API_SPACING_MS)),
+          Effect.tapError((error) =>
+            holdApiSlot(
+              error._tag === "ArcanumCliRateLimitError"
+                ? RATE_LIMIT_COOLDOWN_MS
+                : MIN_API_SPACING_MS,
+            ),
+          ),
+        );
+      }),
+    );
 
   const statusPullRequest = (input: {
     readonly cwd: string;
