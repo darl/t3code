@@ -128,6 +128,13 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.
 
 /** How every Arcadia working copy names its remote; the whole monorepo is the one repository. */
 const ARCADIA_REMOTE_URL = "arc://arcadia/arcadia";
+/**
+ * The one repository identity every arc mount resolves to. Arcanum review URLs
+ * (https://a.yandex-team.ru/review/<n>) name no repository path, so anything
+ * that derives a repository key from a PR URL must map them onto this constant.
+ */
+export const ARCADIA_CANONICAL_KEY = "arcadia/arcadia";
+export const ARCANUM_REVIEW_HOST = "a.yandex-team.ru";
 
 /** The arc mount root, or null outside a mount: `arc root` prints only inside one. */
 const resolveArcadiaRoot = Effect.fn("RepositoryIdentityResolver.resolveArcadiaRoot")(function* (
@@ -161,7 +168,7 @@ function arcadiaIdentity(input: {
   readonly rootPath: string;
 }): RepositoryIdentity {
   return {
-    canonicalKey: "arcadia/arcadia",
+    canonicalKey: ARCADIA_CANONICAL_KEY,
     locator: {
       source: "git-remote",
       remoteName: input.remoteName,

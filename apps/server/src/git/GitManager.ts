@@ -59,6 +59,10 @@ import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import {
+  ARCADIA_CANONICAL_KEY,
+  ARCANUM_REVIEW_HOST,
+} from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { detectPrTemplate } from "../sourceControl/PrTemplateDetection.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
@@ -220,6 +224,11 @@ interface BranchHeadContext {
 export function pullRequestRepositoryKey(value: string): string | null {
   try {
     const url = new URL(value);
+    // Arcanum's review URLs carry no repository path: every review belongs
+    // to the one arcadia monorepo, whose identity is a constant.
+    if (url.hostname === ARCANUM_REVIEW_HOST && /^\/review\/\d+(?:\/.*)?$/u.test(url.pathname)) {
+      return ARCADIA_CANONICAL_KEY;
+    }
     const match =
       /^(.*)(?:\/pull\/|\/-\/merge_requests\/|\/pull-requests\/|\/pullrequest\/)\d+(?:\/.*)?$/iu.exec(
         url.pathname,

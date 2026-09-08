@@ -1657,6 +1657,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       "https://gitlab.example/group/pull/123/repository/-/merge_requests/42",
       "gitlab.example/group/pull/123/repository",
     ],
+    ["https://a.yandex-team.ru/review/15598276", "arcadia/arcadia"],
+    ["https://a.yandex-team.ru/review/15598276/files", "arcadia/arcadia"],
+    ["https://a.yandex-team.ru/arcadia/sdg/simulator", null],
     ["https://github.example.com/team/repository/issues/42", null],
   ] as const)("reads the repository from the returned PR URL %s", (url, expected) => {
     expect(GitManager.pullRequestRepositoryKey(url)).toBe(expected);
