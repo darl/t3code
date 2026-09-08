@@ -214,7 +214,13 @@ export const make = Effect.fn("ArcCheckpointOps.make")(function* (input: ArcChec
   const path = yield* Path.Path;
   const probe = yield* ArcCheckpointProbe;
 
-  const mountRootCache = new Map<string, string | null>();
+  /**
+   * Only found roots are remembered. A miss is not: a worktree directory outlives its
+   * mount (`arc unmount`, a reboot), and the marker appears again on the next `arc mount`.
+   * A cached miss would keep sending that directory down the plain-git path, where the
+   * arc-git shim fails every read-tree with exit 128.
+   */
+  const mountRootCache = new Map<string, string>();
 
   /** Walk up from cwd to the arc mount root, or null outside any mount. */
   const detectMountRoot = Effect.fn("ArcCheckpointOps.detectMountRoot")(function* (cwd: string) {
@@ -234,7 +240,7 @@ export const make = Effect.fn("ArcCheckpointOps.make")(function* (input: ArcChec
       if (parent === directory) break;
       directory = parent;
     }
-    mountRootCache.set(cwd, root);
+    if (root !== null) mountRootCache.set(cwd, root);
     return root;
   });
 

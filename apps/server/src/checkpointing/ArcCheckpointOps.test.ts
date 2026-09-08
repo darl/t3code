@@ -49,13 +49,14 @@ function makeMount() {
           return contents === undefined ? null : new TextEncoder().encode(contents);
         }),
     });
-    const { ops } = yield* ArcCheckpointOps.make({ shadowRootDir: shadowRoot }).pipe(
-      Effect.provide(probeLayer),
-    );
+    const { ops, detectMountRoot } = yield* ArcCheckpointOps.make({
+      shadowRootDir: shadowRoot,
+    }).pipe(Effect.provide(probeLayer));
     return {
       root,
       shadowRoot,
       ops,
+      detectMountRoot,
       pristineReads,
       /** A tracked file with the given content at arc HEAD, now reported as changed. */
       track: (path: string, pristineContents: string) => {
@@ -437,6 +438,30 @@ it.layer(TestLayer)("ArcCheckpointOps", (it) => {
         );
 
         expect(error._tag).toBe("VcsProcessExitError");
+      }),
+    );
+  });
+
+  describe("detectMountRoot", () => {
+    it.effect("sees a mount that appears after an earlier miss", () =>
+      Effect.gen(function* () {
+        const mount = yield* makeMount();
+        const fileSystem = yield* FileSystem.FileSystem;
+        // A worktree directory that outlived its mount: present, but no .arc marker yet.
+        const unmounted = yield* fileSystem.makeTempDirectoryScoped({ prefix: "unmounted-" });
+        const cwd = NodePath.join(unmounted, "some", "subdir");
+        yield* fileSystem.makeDirectory(cwd, { recursive: true });
+
+        expect(yield* mount.detectMountRoot(cwd)).toBeNull();
+
+        // `arc mount` brings the marker back.
+        yield* fileSystem.makeDirectory(NodePath.join(unmounted, ".arc"), { recursive: true });
+        yield* fileSystem.writeFileString(
+          NodePath.join(unmounted, ".arc", "HEAD"),
+          "ref: refs/heads/trunk\n",
+        );
+
+        expect(yield* mount.detectMountRoot(cwd)).toBe(unmounted);
       }),
     );
   });
