@@ -33,6 +33,9 @@ describe("arcanumErrorReason", () => {
       "unauthenticated",
     );
     expect(arcanumErrorReason(new ArcanumCli.ArcanumCliCommandError(context))).toBe("failed");
+    expect(arcanumErrorReason(new ArcanumCli.ArcanumCliRateLimitError(context))).toBe(
+      "rate-limited",
+    );
   });
 
   it("treats an absent token and an HTTP 401 as unusable credentials, and nothing else", () => {
@@ -48,6 +51,7 @@ describe("arcanumErrorReason", () => {
     ).toBe("unauthenticated");
     expect(arcanumErrorReason(responseError(401))).toBe("unauthenticated");
     expect(arcanumErrorReason(responseError(403))).toBe("failed");
+    expect(arcanumErrorReason(responseError(429))).toBe("rate-limited");
     expect(
       arcanumErrorReason(
         new ArcanumPullRequestApi.ArcanumRequestError({

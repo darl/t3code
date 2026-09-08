@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import type * as DateTime from "effect/DateTime";
 import type * as Option from "effect/Option";
@@ -27,6 +28,9 @@ const ARCANUM_DEFAULT_BRANCH = "trunk";
 // 2-minute lookup cache.
 const OUTGOING_PR_SWEEP_TTL_MS = 60_000;
 const OUTGOING_PR_SWEEP_LIMIT = 100;
+// The login never changes for the life of the server process; an hour keeps
+// a token rotation from going unnoticed for long.
+const LOGIN_TTL_MS = 60 * 60_000;
 
 const arcanumCliExecutionErrorContext = {
   operation: Schema.Literal("execute"),
@@ -60,6 +64,19 @@ export class ArcanumCliAuthenticationError extends Schema.TaggedError<ArcanumCli
 ) {
   get detail(): string {
     return "Arc CLI is not authenticated. Run `arc token` and retry.";
+  }
+
+  override get message(): string {
+    return `Arc CLI failed in ${this.operation}: ${this.detail}`;
+  }
+}
+
+export class ArcanumCliRateLimitError extends Schema.TaggedError<ArcanumCliRateLimitError>()(
+  "ArcanumCliRateLimitError",
+  arcanumCliExecutionErrorContext,
+) {
+  get detail(): string {
+    return "Arcanum API rate limit exceeded. Retry in a moment.";
   }
 
   override get message(): string {
@@ -132,9 +149,9 @@ export class ArcanumCliCommandError extends Schema.TaggedError<ArcanumCliCommand
         switch (cause.failureKind) {
           case "authentication":
             return new ArcanumCliAuthenticationError({ ...context, cause });
-          case "not-found":
-          // A rate-limited arc exit is one failed command like any other here, as on GitLab.
           case "rate-limited":
+            return new ArcanumCliRateLimitError({ ...context, cause });
+          case "not-found":
           case "command-failed":
           case undefined:
             return new ArcanumCliCommandError({ ...context, cause });
@@ -188,6 +205,7 @@ export class ArcanumBodyFileReadError extends Schema.TaggedError<ArcanumBodyFile
 export const ArcanumCliError = Schema.Union([
   ArcanumCliUnavailableError,
   ArcanumCliAuthenticationError,
+  ArcanumCliRateLimitError,
   ArcanumPullRequestNotFoundError,
   ArcanumCliCommandError,
   ArcanumPullRequestDecodeError,
@@ -291,16 +309,25 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  // Arcanum allows roughly one API request a second. Every PR read below
+  // passes through this gate, so a server start that looks up dozens of
+  // worktree branches at once queues its calls instead of bursting into
+  // rate-limit failures that each back off for minutes.
+  const apiGate = yield* Semaphore.make(1);
+  const gated = apiGate.withPermits(1);
+
   const statusPullRequest = (input: {
     readonly cwd: string;
     readonly reference: string;
     readonly operation: "listPullRequests" | "getPullRequest";
   }) =>
-    executePullRequest({
-      cwd: input.cwd,
-      reference: input.reference,
-      args: ["pr", "status", input.reference, "--json"],
-    }).pipe(
+    gated(
+      executePullRequest({
+        cwd: input.cwd,
+        reference: input.reference,
+        args: ["pr", "status", input.reference, "--json"],
+      }),
+    ).pipe(
       Effect.map((result) => result.stdout.trim()),
       Effect.flatMap((raw) =>
         Effect.sync(() => decodeArcanumPullRequestJson(raw)).pipe(
@@ -329,15 +356,31 @@ export const make = Effect.gen(function* () {
   ): ReadonlyArray<ArcanumPullRequestSummary> =>
     state === "all" || summary.state === state ? [summary] : [];
 
+  const loginCache = yield* SynchronizedRef.make<{
+    readonly expiresAtMillis: number;
+    readonly login: string | null;
+  } | null>(null);
+
+  // `arc user-info` asks the API too, so it is resolved once and shared by
+  // every branch lookup rather than paid on each of them.
   const arcanumLogin = (cwd: string) =>
-    execute({ cwd, args: ["user-info"] }).pipe(
-      Effect.map(
-        (result) =>
-          /Effective login:\s*(\S+)/iu.exec(result.stdout)?.[1] ??
-          /Token login:\s*(\S+)/iu.exec(result.stdout)?.[1] ??
-          null,
+    SynchronizedRef.updateAndGetEffect(loginCache, (cached) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          cached !== null && cached.expiresAtMillis > now
+            ? Effect.succeed(cached)
+            : gated(execute({ cwd, args: ["user-info"] })).pipe(
+                Effect.map((result) => ({
+                  expiresAtMillis: now + LOGIN_TTL_MS,
+                  login:
+                    /Effective login:\s*(\S+)/iu.exec(result.stdout)?.[1] ??
+                    /Token login:\s*(\S+)/iu.exec(result.stdout)?.[1] ??
+                    null,
+                })),
+              ),
+        ),
       ),
-    );
+    ).pipe(Effect.map((cached) => cached?.login ?? null));
 
   const outgoingPrSweepCache = yield* SynchronizedRef.make<{
     readonly expiresAtMillis: number;
@@ -354,22 +397,24 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((now) =>
           cached !== null && cached.expiresAtMillis > now
             ? Effect.succeed(cached)
-            : execute({
-                cwd,
-                args: [
-                  "pr",
-                  "list",
-                  "-o",
-                  "-S",
-                  "all",
-                  "--sort",
-                  "date",
-                  "--desc",
-                  "--limit",
-                  String(OUTGOING_PR_SWEEP_LIMIT),
-                  "--json",
-                ],
-              }).pipe(
+            : gated(
+                execute({
+                  cwd,
+                  args: [
+                    "pr",
+                    "list",
+                    "-o",
+                    "-S",
+                    "all",
+                    "--sort",
+                    "date",
+                    "--desc",
+                    "--limit",
+                    String(OUTGOING_PR_SWEEP_LIMIT),
+                    "--json",
+                  ],
+                }),
+              ).pipe(
                 Effect.map((result) => ({
                   expiresAtMillis: now + OUTGOING_PR_SWEEP_TTL_MS,
                   // jsonl: one PR object per line; undecodable lines are
@@ -388,84 +433,79 @@ export const make = Effect.gen(function* () {
       ),
     ).pipe(Effect.map((cached) => cached?.entries ?? []));
 
-  // `arc pr status <branch>` resolves the branch→PR mapping only while the
-  // PR is open — it answers "no pull request" the moment the PR merges or
-  // is discarded. Non-open lookups therefore fall back to sweeping the
-  // user's own PRs (t3code only polls branches it published as this user)
-  // and matching on the source branch. Bounded to the newest
-  // OUTGOING_PR_SWEEP_LIMIT PRs — plenty for catching a recent merge, which
-  // is all the poller needs.
-  const sweepPullRequestsByBranch = (input: {
-    readonly cwd: string;
-    readonly headBranch: string;
-    readonly state: "open" | "closed" | "merged" | "all";
-  }) =>
-    (input.headBranch.startsWith("users/")
-      ? Effect.succeed<ReadonlyArray<string>>([input.headBranch])
-      : arcanumLogin(input.cwd).pipe(
+  // Branches are published under users/<login>/, so a plain local name is
+  // also tried in its users/-qualified form.
+  const candidateBranches = (cwd: string, headBranch: string) =>
+    headBranch.startsWith("users/")
+      ? Effect.succeed<ReadonlyArray<string>>([headBranch])
+      : arcanumLogin(cwd).pipe(
           Effect.orElseSucceed(() => null),
           Effect.map((login) =>
-            login === null
-              ? [input.headBranch]
-              : [input.headBranch, `users/${login}/${input.headBranch}`],
+            login === null ? [headBranch] : [headBranch, `users/${login}/${headBranch}`],
           ),
-        )
-    ).pipe(
-      Effect.flatMap((candidateBranches) =>
-        listOutgoingPullRequests(input.cwd).pipe(
-          Effect.map((entries) =>
-            entries
-              .filter((entry) => candidateBranches.includes(entry.headRefName))
-              .flatMap((entry) => filterByState(entry, input.state)),
-          ),
-        ),
+        );
+
+  // Which of the user's recent outgoing PRs sit on one of these branches.
+  // One cached `arc pr list -o` answers every branch the poller asks about
+  // within the TTL, so a server start with dozens of worktrees costs one API
+  // call instead of two per worktree. This is also the only place a merged
+  // or discarded PR keeps reporting its state: `arc pr status` resolves the
+  // branch→PR mapping only while the PR is open.
+  const sweepPullRequestsByBranch = (cwd: string, candidates: ReadonlyArray<string>) =>
+    listOutgoingPullRequests(cwd).pipe(
+      Effect.map((entries) => entries.filter((entry) => candidates.includes(entry.headRefName))),
+    );
+
+  // `arc pr status <branch>`: the direct probe. It finds PRs the sweep cannot
+  // see — authored by someone else (arc pr checkout) or older than the sweep
+  // window — but only while they are open; a miss is an empty list.
+  const probePullRequestByBranch = (cwd: string, reference: string) =>
+    statusPullRequest({ cwd, reference, operation: "listPullRequests" }).pipe(
+      Effect.map((summary): ReadonlyArray<ArcanumPullRequestSummary> => [summary]),
+      Effect.catchTag("ArcanumPullRequestNotFoundError", () =>
+        Effect.succeed<ReadonlyArray<ArcanumPullRequestSummary>>([]),
       ),
     );
 
   return ArcanumCli.of({
     execute,
-    // Arcanum has at most one PR per source branch, so "list by head branch"
-    // is a single `arc pr status <branch>` probe; a missing PR is an empty
-    // list, not an error. Branches are published under users/<login>/, so a
-    // miss on the plain local name retries the users/-qualified form. The
-    // probe only resolves OPEN PRs, so when non-open states are wanted and
-    // the probe found nothing, the cached outgoing-PR sweep gets the last
-    // word — that is how a merged/discarded PR keeps reporting its state.
+    // Arcanum has at most one PR per source branch. The cached sweep is
+    // consulted first and the per-branch probe only when the sweep has
+    // nothing for the branch, which keeps the steady-state Arcanum load at
+    // about one call a minute regardless of how many worktrees are polled.
     listPullRequests: (input) =>
-      statusPullRequest({
-        cwd: input.cwd,
-        reference: input.headBranch,
-        operation: "listPullRequests",
-      }).pipe(
-        Effect.map((summary) => filterByState(summary, input.state)),
-        Effect.catchTag("ArcanumPullRequestNotFoundError", () =>
-          input.headBranch.startsWith("users/")
-            ? Effect.succeed<ReadonlyArray<ArcanumPullRequestSummary>>([])
-            : arcanumLogin(input.cwd).pipe(
-                Effect.flatMap((login) =>
-                  login === null
-                    ? Effect.succeed<ReadonlyArray<ArcanumPullRequestSummary>>([])
-                    : statusPullRequest({
-                        cwd: input.cwd,
-                        reference: `users/${login}/${input.headBranch}`,
-                        operation: "listPullRequests",
-                      }).pipe(Effect.map((summary) => filterByState(summary, input.state))),
-                ),
-                // The primary lookup already answered "no PR"; fallback
-                // failures must not turn that into a poll error.
-                Effect.orElseSucceed((): ReadonlyArray<ArcanumPullRequestSummary> => []),
-              ),
-        ),
-        Effect.flatMap((found) =>
-          found.length > 0 || input.state === "open"
-            ? Effect.succeed(found)
-            : sweepPullRequestsByBranch(input).pipe(
-                // Same contract as above: the probe already gave a valid
-                // "no open PR" answer, so a sweep failure falls back to it.
-                Effect.orElseSucceed(() => found),
-              ),
-        ),
-      ),
+      Effect.gen(function* () {
+        const candidates = yield* candidateBranches(input.cwd, input.headBranch);
+        const swept = yield* sweepPullRequestsByBranch(input.cwd, candidates).pipe(
+          // A throttled sweep must not fan out into per-branch probes that
+          // would only deepen the throttle; any other sweep failure leaves
+          // the probe to answer.
+          Effect.catchIf(
+            (error) => error._tag !== "ArcanumCliRateLimitError",
+            () => Effect.succeed<ReadonlyArray<ArcanumPullRequestSummary>>([]),
+          ),
+        );
+        if (swept.length > 0) {
+          return swept.flatMap((entry) => filterByState(entry, input.state));
+        }
+        const [primary, ...fallbacks] = candidates;
+        if (primary === undefined) return [];
+        const found = yield* probePullRequestByBranch(input.cwd, primary);
+        if (found.length > 0) {
+          return found.flatMap((entry) => filterByState(entry, input.state));
+        }
+        for (const reference of fallbacks) {
+          // The primary probe already answered "no PR"; a fallback failure
+          // must not turn that into a poll error.
+          const fallback = yield* probePullRequestByBranch(input.cwd, reference).pipe(
+            Effect.orElseSucceed((): ReadonlyArray<ArcanumPullRequestSummary> => []),
+          );
+          if (fallback.length > 0) {
+            return fallback.flatMap((entry) => filterByState(entry, input.state));
+          }
+        }
+        return [];
+      }),
     getPullRequest: (input) =>
       statusPullRequest({
         cwd: input.cwd,

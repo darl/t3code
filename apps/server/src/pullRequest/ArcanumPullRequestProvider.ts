@@ -76,8 +76,14 @@ export function arcanumErrorReason(
     case "ArcanumCliAuthenticationError":
     case "ArcanumTokenMissingError":
       return "unauthenticated";
+    case "ArcanumCliRateLimitError":
+      return "rate-limited";
     case "ArcanumResponseError":
-      return error.status === 401 ? "unauthenticated" : "failed";
+      return error.status === 401
+        ? "unauthenticated"
+        : error.status === 429
+          ? "rate-limited"
+          : "failed";
     default:
       return "failed";
   }
