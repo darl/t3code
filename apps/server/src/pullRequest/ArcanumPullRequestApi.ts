@@ -60,7 +60,7 @@ const ArcanumApiEnvConfig = Config.all({
  * account as signed out rather than each read failing its own way. Carries nothing but the
  * operation: the token is a secret, and even the paths it was looked for on stay out of errors.
  */
-export class ArcanumTokenMissingError extends Schema.TaggedErrorClass<ArcanumTokenMissingError>()(
+export class ArcanumTokenMissingError extends Schema.TaggedError<ArcanumTokenMissingError>()(
   "ArcanumTokenMissingError",
   {
     operation: Schema.String,
@@ -75,7 +75,7 @@ export class ArcanumTokenMissingError extends Schema.TaggedErrorClass<ArcanumTok
   }
 }
 
-export class ArcanumRequestError extends Schema.TaggedErrorClass<ArcanumRequestError>()(
+export class ArcanumRequestError extends Schema.TaggedError<ArcanumRequestError>()(
   "ArcanumRequestError",
   {
     operation: Schema.String,
@@ -91,7 +91,7 @@ export class ArcanumRequestError extends Schema.TaggedErrorClass<ArcanumRequestE
   }
 }
 
-export class ArcanumResponseError extends Schema.TaggedErrorClass<ArcanumResponseError>()(
+export class ArcanumResponseError extends Schema.TaggedError<ArcanumResponseError>()(
   "ArcanumResponseError",
   {
     operation: Schema.String,
@@ -115,7 +115,7 @@ export class ArcanumResponseError extends Schema.TaggedErrorClass<ArcanumRespons
   }
 }
 
-export class ArcanumResponseBodyReadError extends Schema.TaggedErrorClass<ArcanumResponseBodyReadError>()(
+export class ArcanumResponseBodyReadError extends Schema.TaggedError<ArcanumResponseBodyReadError>()(
   "ArcanumResponseBodyReadError",
   {
     operation: Schema.String,
@@ -132,7 +132,7 @@ export class ArcanumResponseBodyReadError extends Schema.TaggedErrorClass<Arcanu
   }
 }
 
-export class ArcanumResponseDecodeError extends Schema.TaggedErrorClass<ArcanumResponseDecodeError>()(
+export class ArcanumResponseDecodeError extends Schema.TaggedError<ArcanumResponseDecodeError>()(
   "ArcanumResponseDecodeError",
   {
     operation: Schema.String,
@@ -150,7 +150,7 @@ export class ArcanumResponseDecodeError extends Schema.TaggedErrorClass<ArcanumR
 }
 
 /** Names the CLI read that produced unusable JSON, mirroring the Bitbucket read error. */
-export class ArcanumCliDecodeError extends Schema.TaggedErrorClass<ArcanumCliDecodeError>()(
+export class ArcanumCliDecodeError extends Schema.TaggedError<ArcanumCliDecodeError>()(
   "ArcanumCliDecodeError",
   {
     operation: Schema.String,
@@ -167,7 +167,7 @@ export class ArcanumCliDecodeError extends Schema.TaggedErrorClass<ArcanumCliDec
 }
 
 /** Not a decode failure: arc answered, the account it answered for just has no login line. */
-export class ArcanumViewerUnavailableError extends Schema.TaggedErrorClass<ArcanumViewerUnavailableError>()(
+export class ArcanumViewerUnavailableError extends Schema.TaggedError<ArcanumViewerUnavailableError>()(
   "ArcanumViewerUnavailableError",
   {},
 ) {
@@ -181,7 +181,7 @@ export class ArcanumViewerUnavailableError extends Schema.TaggedErrorClass<Arcan
 }
 
 /** Not a decode failure: the reader named a commit that is not a sha a repository could hold. */
-export class ArcanumDiffCommitError extends Schema.TaggedErrorClass<ArcanumDiffCommitError>()(
+export class ArcanumDiffCommitError extends Schema.TaggedError<ArcanumDiffCommitError>()(
   "ArcanumDiffCommitError",
   {},
 ) {
@@ -195,7 +195,7 @@ export class ArcanumDiffCommitError extends Schema.TaggedErrorClass<ArcanumDiffC
 }
 
 /** A review draft names a file the changelist does not hold, refused before anything posts. */
-export class ArcanumReviewPathError extends Schema.TaggedErrorClass<ArcanumReviewPathError>()(
+export class ArcanumReviewPathError extends Schema.TaggedError<ArcanumReviewPathError>()(
   "ArcanumReviewPathError",
   {
     path: Schema.String,

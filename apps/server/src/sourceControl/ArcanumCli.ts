@@ -41,7 +41,7 @@ const arcanumCliDecodeErrorContext = {
   cause: Schema.Defect(),
 };
 
-export class ArcanumCliUnavailableError extends Schema.TaggedErrorClass<ArcanumCliUnavailableError>()(
+export class ArcanumCliUnavailableError extends Schema.TaggedError<ArcanumCliUnavailableError>()(
   "ArcanumCliUnavailableError",
   arcanumCliExecutionErrorContext,
 ) {
@@ -54,7 +54,7 @@ export class ArcanumCliUnavailableError extends Schema.TaggedErrorClass<ArcanumC
   }
 }
 
-export class ArcanumCliAuthenticationError extends Schema.TaggedErrorClass<ArcanumCliAuthenticationError>()(
+export class ArcanumCliAuthenticationError extends Schema.TaggedError<ArcanumCliAuthenticationError>()(
   "ArcanumCliAuthenticationError",
   arcanumCliExecutionErrorContext,
 ) {
@@ -67,7 +67,7 @@ export class ArcanumCliAuthenticationError extends Schema.TaggedErrorClass<Arcan
   }
 }
 
-export class ArcanumPullRequestNotFoundError extends Schema.TaggedErrorClass<ArcanumPullRequestNotFoundError>()(
+export class ArcanumPullRequestNotFoundError extends Schema.TaggedError<ArcanumPullRequestNotFoundError>()(
   "ArcanumPullRequestNotFoundError",
   {
     ...arcanumCliExecutionErrorContext,
@@ -106,7 +106,7 @@ export class ArcanumPullRequestNotFoundError extends Schema.TaggedErrorClass<Arc
   }
 }
 
-export class ArcanumCliCommandError extends Schema.TaggedErrorClass<ArcanumCliCommandError>()(
+export class ArcanumCliCommandError extends Schema.TaggedError<ArcanumCliCommandError>()(
   "ArcanumCliCommandError",
   arcanumCliExecutionErrorContext,
 ) {
@@ -151,7 +151,7 @@ export class ArcanumCliCommandError extends Schema.TaggedErrorClass<ArcanumCliCo
   }
 }
 
-export class ArcanumPullRequestDecodeError extends Schema.TaggedErrorClass<ArcanumPullRequestDecodeError>()(
+export class ArcanumPullRequestDecodeError extends Schema.TaggedError<ArcanumPullRequestDecodeError>()(
   "ArcanumPullRequestDecodeError",
   {
     ...arcanumCliDecodeErrorContext,
@@ -168,7 +168,7 @@ export class ArcanumPullRequestDecodeError extends Schema.TaggedErrorClass<Arcan
   }
 }
 
-export class ArcanumBodyFileReadError extends Schema.TaggedErrorClass<ArcanumBodyFileReadError>()(
+export class ArcanumBodyFileReadError extends Schema.TaggedError<ArcanumBodyFileReadError>()(
   "ArcanumBodyFileReadError",
   {
     ...arcanumCliDecodeErrorContext,

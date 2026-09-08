@@ -157,14 +157,12 @@ export const make = Effect.gen(function* () {
         // changed-file count degrade rather than blank it.
         const detail = yield* api.getPullRequestDetail({ number: input.number });
         const enrichment = yield* api.getPullRequestEnrichment({ number: input.number }).pipe(
-          Effect.orElseSucceed(
-            (): ArcanumPullRequestEnrichment => ({
-              isDraft: false,
-              additions: 0,
-              deletions: 0,
-              diffSetId: null,
-            }),
-          ),
+          Effect.orElseSucceed((): ArcanumPullRequestEnrichment => ({
+            isDraft: false,
+            additions: 0,
+            deletions: 0,
+            diffSetId: null,
+          })),
         );
         // The check statuses live only on the diff set's own checks — the entity's `checks`
         // field carries none at all — so they are read by the id the enrichment answered.
@@ -217,18 +215,16 @@ export const make = Effect.gen(function* () {
       api.getPullRequestStatus({ cwd: input.cwd, number: input.number }).pipe(
         Effect.flatMap((status) => api.listActivity({ number: input.number, url: status.url })),
         Effect.mapError(fail("getChangeRequestActivity")),
-        Effect.map(
-          (activity): ProviderChangeRequestActivity => ({
-            comments: activity.comments,
-            commentCount: activity.commentCount,
-            // The endpoint answers the conversation whole; a conversation read to its end is
-            // never truncated, however long it is.
-            commentsTruncated: false,
-            reviewThreads: activity.reviewThreads,
-            // Arcanum's commits live behind the diff-set list, which nothing verified reads yet.
-            commits: [],
-          }),
-        ),
+        Effect.map((activity): ProviderChangeRequestActivity => ({
+          comments: activity.comments,
+          commentCount: activity.commentCount,
+          // The endpoint answers the conversation whole; a conversation read to its end is
+          // never truncated, however long it is.
+          commentsTruncated: false,
+          reviewThreads: activity.reviewThreads,
+          // Arcanum's commits live behind the diff-set list, which nothing verified reads yet.
+          commits: [],
+        })),
       ),
 
     // No request at all, like Azure: Arcanum states nothing about the viewer that a pull
