@@ -221,6 +221,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["composer rest resting scroll wheel conversation timeline shrink minimize"],
   },
   {
+    id: "terminal-copy-on-select",
+    title: "Copy terminal selection automatically",
+    to: "/settings/general",
+    searchTerms: ["terminal clipboard select selection mouse copy popup menu"],
+  },
+  {
     id: "provider-update-checks",
     title: "Provider update checks",
     to: "/settings/general",
