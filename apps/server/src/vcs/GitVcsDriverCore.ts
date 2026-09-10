@@ -2884,10 +2884,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
-    yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
-      fallbackErrorDetail: "git worktree add failed",
+    const added = yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
+      allowNonZeroExit: true,
       timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
     });
+    if (added.exitCode !== 0) {
+      // The user picked the base ref and sees this message; git's own reason
+      // ("invalid reference", "already exists", ...) is what lets them fix it.
+      const reason = added.stderr.trim().split("\n").slice(0, 3).join("\n").slice(0, 400);
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation: "GitVcsDriver.createWorktree", cwd: input.cwd, args }),
+        detail:
+          reason.length > 0 ? `git worktree add failed: ${reason}` : "git worktree add failed",
+        ...(added.exitCode === null ? {} : { exitCode: added.exitCode }),
+        stdoutLength: added.stdout.length,
+        stderrLength: added.stderr.length,
+      });
+    }
 
     // `git worktree add` leaves submodules empty, so a repo that keeps agent
     // skills, tooling or source in one gets a worktree that is quietly missing
