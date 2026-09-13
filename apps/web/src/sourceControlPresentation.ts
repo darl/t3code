@@ -19,6 +19,7 @@ import {
   BitbucketIcon,
   GitHubIcon,
   GitLabIcon,
+  ForgejoIcon,
 } from "./components/Icons";
 
 export interface SourceControlPresentation {
@@ -37,6 +38,12 @@ export function getSourceControlPresentation(
         providerName: provider?.name || presentation.providerName,
         terminology: getChangeRequestTerminology(provider),
         Icon: GitHubIcon,
+      };
+    case "forgejo":
+      return {
+        providerName: provider?.name || presentation.providerName,
+        terminology: getChangeRequestTerminology(provider),
+        Icon: ForgejoIcon,
       };
     case "gitlab":
       return {
