@@ -88,9 +88,19 @@ const desktopEnvironmentLayer = Layer.unwrap(
 // The remote runs the exact release this app is on, from its self-contained
 // archive, so it needs neither Node nor npm. Development points the remote at
 // a source checkout instead so the two sides can be iterated together.
+// A fork build has no published archive for its version, so the settings
+// file can name a server entry script on the remote; that also lets the
+// launcher reuse a server already running from the same checkout.
 const resolveDesktopSshCliRunner = (
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
+  settings: DesktopAppSettings.DesktopSettings,
 ): RemoteT3RunnerOptions => {
+  if (settings.sshRemoteServerEntryPath !== null) {
+    return {
+      nodeScriptPath: settings.sshRemoteServerEntryPath,
+      nodeEngineRange: serverPackageJson.engines.node,
+    };
+  }
   const devRemoteEntryPath = Option.getOrUndefined(environment.devRemoteT3ServerEntryPath);
   if (environment.isDevelopment && devRemoteEntryPath !== undefined) {
     return {
@@ -104,8 +114,11 @@ const resolveDesktopSshCliRunner = (
 const desktopSshEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const settings = yield* DesktopAppSettings.DesktopAppSettings;
     return DesktopSshEnvironment.layer({
-      resolveCliRunner: Effect.succeed(resolveDesktopSshCliRunner(environment)),
+      resolveCliRunner: settings.get.pipe(
+        Effect.map((currentSettings) => resolveDesktopSshCliRunner(environment, currentSettings)),
+      ),
     });
   }),
 );
