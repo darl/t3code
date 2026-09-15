@@ -265,6 +265,47 @@ describe("pull request toolkit handlers", () => {
     }),
   );
 
+  it.effect("keys an Arcanum review under the arcadia checkout however the agent names it", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        project: makeProject({
+          canonicalKey: "arcadia/arcadia",
+          locator: {
+            source: "git-remote",
+            remoteName: "arcadia",
+            remoteUrl: "arc://arcadia/arcadia",
+          },
+          provider: "arcanum",
+          displayName: "arcadia",
+          owner: "arcadia",
+          name: "arcadia",
+        }),
+      });
+      const byUrl = yield* harness.call("link_pull_request", {
+        url: "https://a.yandex-team.ru/review/15772960",
+      });
+      expect(byUrl).toEqual({
+        host: "arcadia",
+        repository: "arcadia",
+        number: 15772960,
+        url: "https://a.yandex-team.ru/review/15772960",
+        alreadyLinked: false,
+      });
+      const byReviewHost = yield* harness.call("link_pull_request", {
+        host: "a.yandex-team.ru",
+        repository: "arcadia",
+        number: 15772961,
+      });
+      expect(byReviewHost).toEqual({
+        host: "arcadia",
+        repository: "arcadia",
+        number: 15772961,
+        url: "https://a.yandex-team.ru/review/15772961",
+        alreadyLinked: false,
+      });
+    }),
+  );
+
   it.effect("links a numeric Forgejo reference with its remote's web origin and mount path", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({

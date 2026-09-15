@@ -18,6 +18,11 @@ export interface ChangeRequestLink {
 }
 
 const ARCANUM_REVIEW_HOST = "a.yandex-team.ru";
+/**
+ * The host segment of the arcadia repository key (`arcadia/arcadia`), which is also what
+ * the project identity of an arc checkout records; the review UI's own hostname is not it.
+ */
+const ARCANUM_KEY_HOST = "arcadia";
 const ARCANUM_REPOSITORY = "arcadia";
 
 /** The host itself, one of its subdomains, or an install named after the provider. */
@@ -67,12 +72,13 @@ export function parseChangeRequestUrl(targetUrl: string): ChangeRequestLink | nu
   const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
   if (gitlab) return claim(host, gitlab);
   // Arcanum: /review/{n}. Arcadia is one monorepo, so the review UI names no repository;
-  // "arcadia" is the repository name the project identity records for arc checkouts.
+  // the key is the constant `arcadia/arcadia` the project identity records for arc checkouts,
+  // so a review link and the checkout it came from resolve to the same host.
   if (host === ARCANUM_REVIEW_HOST) {
     const match = /^\/review\/(\d+)(?:\/|$)/u.exec(url.pathname);
     const number = Number(match?.[1]);
     return match && Number.isSafeInteger(number) && number > 0
-      ? { host, repository: ARCANUM_REPOSITORY, number }
+      ? { host: ARCANUM_KEY_HOST, repository: ARCANUM_REPOSITORY, number }
       : null;
   }
   // Bitbucket Cloud: /{workspace}/{repo}/pull-requests/{n}

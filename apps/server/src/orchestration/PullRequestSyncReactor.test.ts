@@ -428,7 +428,9 @@ describe("PullRequestSyncReactor", () => {
               {
                 type: "thread.pull-request.link",
                 threadId: ThreadId.make("one"),
-                host: "a.yandex-team.ru",
+                // The corrected link carries the checkout's own key host, so it routes to
+                // the project rather than to the review UI's hostname.
+                host: "arcadia",
                 repository: "arcadia",
                 number: 15750946,
                 url: "https://a.yandex-team.ru/review/15750946",

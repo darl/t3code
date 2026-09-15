@@ -82,14 +82,16 @@ describe("parseChangeRequestUrl", () => {
     });
   });
 
-  it("reads an Arcanum review as the arcadia repository", () => {
+  it("reads an Arcanum review as the arcadia checkout's own key", () => {
+    // The key host is the one the arc checkout's project identity records, so a review
+    // link routes to that project rather than to a host no project has.
     expect(parseChangeRequestUrl("https://a.yandex-team.ru/review/15750946")).toEqual({
-      host: "a.yandex-team.ru",
+      host: "arcadia",
       repository: "arcadia",
       number: 15750946,
     });
     expect(parseChangeRequestUrl("https://a.yandex-team.ru/review/15750946/files?x=1")).toEqual({
-      host: "a.yandex-team.ru",
+      host: "arcadia",
       repository: "arcadia",
       number: 15750946,
     });

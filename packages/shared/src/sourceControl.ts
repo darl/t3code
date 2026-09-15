@@ -329,13 +329,17 @@ export function sourceControlRepositorySelector(
 }
 
 export function canonicalRepositoryKey(key: string): string {
-  return key
-    .replace(
-      /^(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/u,
-      "dev.azure.com/$1/$2/_git/$3",
-    )
-    .replace(
-      /^([^.]+)\.visualstudio\.com\/(?:defaultcollection\/)?([^/]+)\/_git\/([^/]+)$/u,
-      "dev.azure.com/$1/$2/_git/$3",
-    );
+  return (
+    key
+      // Links stored with the Arcanum review UI's hostname mean the arcadia checkout's key.
+      .replace(/^a\.yandex-team\.ru\/arcadia$/u, "arcadia/arcadia")
+      .replace(
+        /^(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/u,
+        "dev.azure.com/$1/$2/_git/$3",
+      )
+      .replace(
+        /^([^.]+)\.visualstudio\.com\/(?:defaultcollection\/)?([^/]+)\/_git\/([^/]+)$/u,
+        "dev.azure.com/$1/$2/_git/$3",
+      )
+  );
 }
