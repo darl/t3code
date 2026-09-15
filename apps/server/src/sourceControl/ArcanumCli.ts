@@ -41,6 +41,12 @@ const LOGIN_TTL_MS = 60 * 60_000;
 // against it.
 export const MIN_API_SPACING_MS = 1_500;
 export const RATE_LIMIT_COOLDOWN_MS = 10_000;
+// A branch the probe found no PR for is not asked about again for a while.
+// The poller asks every open thread's branch once a minute, and most branches
+// have no PR at all, so without this each of them costs one or two Arcanum
+// calls a minute. The user's own new PRs still show up through the sweep
+// within its TTL; only a colleague's PR on the same branch waits this long.
+export const NO_PR_PROBE_TTL_MS = 15 * 60_000;
 
 const arcanumCliExecutionErrorContext = {
   operation: Schema.Literal("execute"),
@@ -486,15 +492,35 @@ export const make = Effect.gen(function* () {
       Effect.map((entries) => entries.filter((entry) => candidates.includes(entry.headRefName))),
     );
 
+  // Branch references whose probe answered "no PR", with the time that answer
+  // stops being trusted. Branch names are host-wide in Arcanum, so the key
+  // needs no cwd.
+  const probeMisses = new Map<string, number>();
+
   // `arc pr status <branch>`: the direct probe. It finds PRs the sweep cannot
   // see — authored by someone else (arc pr checkout) or older than the sweep
-  // window — but only while they are open; a miss is an empty list.
+  // window — but only while they are open; a miss is an empty list, and is
+  // remembered for NO_PR_PROBE_TTL_MS.
   const probePullRequestByBranch = (cwd: string, reference: string) =>
-    statusPullRequest({ cwd, reference, operation: "listPullRequests" }).pipe(
-      Effect.map((summary): ReadonlyArray<ArcanumPullRequestSummary> => [summary]),
-      Effect.catchTag("ArcanumPullRequestNotFoundError", () =>
-        Effect.succeed<ReadonlyArray<ArcanumPullRequestSummary>>([]),
-      ),
+    Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) => {
+        const missUntil = probeMisses.get(reference);
+        if (missUntil !== undefined && missUntil > now) {
+          return Effect.succeed<ReadonlyArray<ArcanumPullRequestSummary>>([]);
+        }
+        probeMisses.delete(reference);
+        return statusPullRequest({ cwd, reference, operation: "listPullRequests" }).pipe(
+          Effect.map((summary): ReadonlyArray<ArcanumPullRequestSummary> => [summary]),
+          Effect.catchTag("ArcanumPullRequestNotFoundError", () =>
+            Clock.currentTimeMillis.pipe(
+              Effect.map((missedAt) => {
+                probeMisses.set(reference, missedAt + NO_PR_PROBE_TTL_MS);
+                return [] as ReadonlyArray<ArcanumPullRequestSummary>;
+              }),
+            ),
+          ),
+        );
+      }),
     );
 
   return ArcanumCli.of({
@@ -505,6 +531,8 @@ export const make = Effect.gen(function* () {
     // about one call a minute regardless of how many worktrees are polled.
     listPullRequests: (input) =>
       Effect.gen(function* () {
+        // trunk is the target of every PR and the source of none.
+        if (input.headBranch === ARCANUM_DEFAULT_BRANCH) return [];
         const candidates = yield* candidateBranches(input.cwd, input.headBranch);
         const swept = yield* sweepPullRequestsByBranch(input.cwd, candidates).pipe(
           // A throttled sweep must not fan out into per-branch probes that
@@ -565,6 +593,8 @@ export const make = Effect.gen(function* () {
             args: ["pr", "create", "--no-edit", "-m", message, "--to", input.baseBranch],
           });
         }),
+        // The new PR sits on a branch that may have just been remembered as empty.
+        Effect.tap(() => Effect.sync(() => probeMisses.clear())),
         Effect.asVoid,
       ),
     // Arcadia's default branch is always trunk; arc has no remote query for it.

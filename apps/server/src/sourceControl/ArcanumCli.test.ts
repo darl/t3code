@@ -167,6 +167,70 @@ describe("ArcanumCli.listPullRequests", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("never asks Arcanum about trunk", () =>
+    Effect.gen(function* () {
+      answer({});
+
+      const arc = yield* ArcanumCli.ArcanumCli;
+      const found = yield* paced(
+        arc.listPullRequests({ cwd: CWD, headBranch: "trunk", state: "all" }),
+      );
+
+      expect(found).toEqual([]);
+      expect(arcCalls()).toEqual([]);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("remembers a branch without a PR instead of probing it every minute", () =>
+    Effect.gen(function* () {
+      answer({
+        "user-info": () => Effect.succeed(output("Effective login: alice\n")),
+        "pr list": () => Effect.succeed(output("")),
+        "pr status": () => Effect.fail(exitError("not-found", "no pull request")),
+      });
+
+      const arc = yield* ArcanumCli.ArcanumCli;
+      const lookup = arc.listPullRequests({ cwd: CWD, headBranch: "feature-x", state: "all" });
+      yield* paced(lookup);
+      yield* paced(lookup);
+      expect(arcCalls().filter((call) => call.startsWith("pr status"))).toHaveLength(2);
+
+      yield* TestClock.adjust(`${ArcanumCli.NO_PR_PROBE_TTL_MS} millis`);
+      yield* paced(lookup);
+      expect(arcCalls().filter((call) => call.startsWith("pr status"))).toHaveLength(4);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("forgets remembered misses once a PR is created", () =>
+    Effect.gen(function* () {
+      answer({
+        "user-info": () => Effect.succeed(output("Effective login: alice\n")),
+        "pr list": () => Effect.succeed(output("")),
+        "pr status": () => Effect.fail(exitError("not-found", "no pull request")),
+        "pr create": () => Effect.succeed(output("")),
+      });
+
+      const arc = yield* ArcanumCli.ArcanumCli;
+      const lookup = arc.listPullRequests({ cwd: CWD, headBranch: "feature-x", state: "all" });
+      yield* paced(lookup);
+      yield* arc.createPullRequest({
+        cwd: CWD,
+        baseBranch: "trunk",
+        title: "feature-x",
+        bodyFile: "/tmp/body.md",
+      });
+      yield* paced(lookup);
+      expect(arcCalls().filter((call) => call.startsWith("pr status"))).toHaveLength(4);
+    }).pipe(
+      Effect.provide(
+        ArcanumCli.layer.pipe(
+          Layer.provide(Layer.mock(VcsProcess.VcsProcess)({ run: mockRun })),
+          Layer.provide(FileSystem.layerNoop({ readFileString: () => Effect.succeed("body") })),
+        ),
+      ),
+    ),
+  );
+
   it.effect("finds a colleague's open PR through the probe", () =>
     Effect.gen(function* () {
       answer({
