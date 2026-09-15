@@ -361,6 +361,36 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
     }),
   );
 
+  it.effect("re-linking with another address corrects the stored url", () =>
+    Effect.gen(function* () {
+      const linked = makeLink({
+        host: "a.yandex-team.ru",
+        repository: "arcadia",
+        number: 15750946,
+        url: "https://a.yandex-team.ru/arcadia/pull/15750946",
+        source: "agent",
+      });
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.pull-request.link",
+          commandId: CommandId.make("cmd-link-fix-url"),
+          threadId: THREAD_ID,
+          host: "a.yandex-team.ru",
+          repository: "arcadia",
+          number: 15750946,
+          url: "https://a.yandex-team.ru/review/15750946",
+          source: "agent",
+        },
+        readModel: makeReadModel([linked]),
+      });
+      const event = expectSingleEvent(decided, "thread.pull-request-linked");
+      expect(event.payload.link).toEqual({
+        ...linked,
+        url: "https://a.yandex-team.ru/review/15750946",
+      });
+    }),
+  );
+
   it.effect("re-linking a dismissed stack member un-dismisses it", () =>
     Effect.gen(function* () {
       const dismissed = makeLink({

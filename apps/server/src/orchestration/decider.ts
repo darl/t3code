@@ -1031,12 +1031,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       const key = normalizeThreadPullRequestKey(command);
       const existing = findPullRequestLink(thread, key);
-      // An explicit link on a dismissed stack member un-dismisses it; any
-      // other duplicate is a no-op the engine would reject as zero-event.
+      // An explicit link on a dismissed stack member un-dismisses it, and a
+      // link that spells the same pull request's address differently
+      // corrects the stored one; any other duplicate is a no-op the engine
+      // would reject as zero-event.
       const undismisses =
         existing?.source === "stack-dismissed" &&
         (command.source === "manual" || command.source === "agent" || command.source === "created");
-      if (existing !== undefined && !undismisses) {
+      const correctsUrl = existing !== undefined && existing.url !== command.url;
+      if (existing !== undefined && !undismisses && !correctsUrl) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `pull request ${key.host}/${key.repository}#${key.number} is already linked to thread ${command.threadId}`,

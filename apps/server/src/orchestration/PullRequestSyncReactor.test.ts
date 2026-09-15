@@ -388,6 +388,59 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 
+  it.effect("rewrites a link whose url no host shape explains, using the project's provider", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const badLink = makeLink(15750946, null, {
+          host: "a.yandex-team.ru",
+          repository: "arcadia",
+          url: "https://a.yandex-team.ru/arcadia/pull/15750946",
+          source: "agent",
+        });
+        const snapshot = makeSnapshot([makeThread("one", { pullRequests: [badLink] })]);
+        const fixture = yield* makeHarness({
+          snapshot: {
+            ...snapshot,
+            projects: [
+              {
+                ...makeProject(),
+                repositoryIdentity: {
+                  canonicalKey: "a.yandex-team.ru/arcadia",
+                  locator: {
+                    source: "git-remote",
+                    remoteName: "arcadia",
+                    remoteUrl: "arc://arcadia/arcadia",
+                  },
+                  provider: "arcanum",
+                },
+              },
+            ],
+          },
+        });
+
+        yield* Effect.gen(function* () {
+          yield* startAndSweep(fixture);
+
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.linkCommands)).map(({ commandId: _, ...rest }) => rest),
+            [
+              {
+                type: "thread.pull-request.link",
+                threadId: ThreadId.make("one"),
+                host: "a.yandex-team.ru",
+                repository: "arcadia",
+                number: 15750946,
+                url: "https://a.yandex-team.ru/review/15750946",
+                source: "agent",
+              },
+            ],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   it.effect("asks the host once for a pull request shared by two threads", () =>
     Effect.scoped(
       Effect.gen(function* () {

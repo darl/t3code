@@ -1,6 +1,11 @@
-import { siblingPullRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import {
+  changeRequestUrlFor,
+  parseChangeRequestUrl,
+  siblingPullRequestUrl,
+} from "@t3tools/shared/changeRequestUrl";
 import {
   CommandId,
+  type OrchestrationProjectShell,
   type OrchestrationThreadShell,
   type PullRequestSummary,
   type ThreadPullRequestKey,
@@ -102,6 +107,27 @@ function stacksEqual(
   );
 }
 
+/**
+ * The address a link should carry, when the one it has is not a change request URL this code
+ * can read. Links written before a host was taught here (Arcanum's review pages, for one)
+ * fell back to a GitHub-shaped guess; the project's provider says what the host really writes.
+ */
+function correctedLinkUrl(
+  link: ThreadPullRequestLink,
+  project: OrchestrationProjectShell | undefined,
+): string | null {
+  if (parseChangeRequestUrl(link.url) !== null) return null;
+  const identity = project?.repositoryIdentity;
+  const url = changeRequestUrlFor(
+    identity?.provider,
+    normalizeThreadPullRequestKey(link).host,
+    link.repository,
+    link.number,
+    identity?.locator.remoteUrl,
+  );
+  return url === null || url === link.url ? null : url;
+}
+
 function isUnsettled(thread: OrchestrationThreadShell): boolean {
   return thread.settledOverride !== "settled" && thread.settledAt === null;
 }
@@ -156,10 +182,34 @@ export const make = Effect.gen(function* () {
     const nowMs = DateTime.toEpochMillis(now);
     const nowIso = DateTime.formatIso(now);
 
+    const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
     const groups = new Map<string, Array<LinkEntry>>();
     for (const thread of snapshot.threads) {
       if (thread.archivedAt !== null) continue;
       for (const link of visibleThreadPullRequests(thread.pullRequests)) {
+        const correctedUrl = correctedLinkUrl(link, projects.get(thread.projectId));
+        if (correctedUrl !== null) {
+          const uuid = yield* crypto.randomUUIDv4;
+          yield* engine
+            .dispatch({
+              type: "thread.pull-request.link",
+              commandId: CommandId.make(`server:pr-url-fix:${thread.id}:${uuid}`),
+              threadId: thread.id,
+              host: normalizeThreadPullRequestKey(link).host,
+              repository: link.repository,
+              number: link.number,
+              url: correctedUrl,
+              source: link.source,
+            })
+            .pipe(
+              Effect.catchCause(
+                logSkipped("pull request link url fix skipped", {
+                  threadId: thread.id,
+                  number: link.number,
+                }),
+              ),
+            );
+        }
         const key = threadPullRequestKeyOf(link);
         const entries = groups.get(key) ?? [];
         entries.push({ thread, link });
