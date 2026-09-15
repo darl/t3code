@@ -23,6 +23,7 @@ import {
 } from "../src/textGeneration/ThreadTitleContext.ts";
 import * as ThreadTitleLinks from "../src/textGeneration/ThreadTitleLinks.ts";
 import * as SourceControlProviderRegistry from "../src/sourceControl/SourceControlProviderRegistry.ts";
+import * as ArcanumCli from "../src/sourceControl/ArcanumCli.ts";
 import * as GitHubCli from "../src/sourceControl/GitHubCli.ts";
 import * as GitLabCli from "../src/sourceControl/GitLabCli.ts";
 import * as ForgejoCli from "../src/sourceControl/ForgejoCli.ts";
@@ -151,6 +152,7 @@ await Effect.runPromise(
         SourceControlProviderRegistry.layer.pipe(
           Layer.provide(
             Layer.mergeAll(
+              ArcanumCli.layer,
               GitHubCli.layer,
               GitLabCli.layer,
               ForgejoCli.layer,
