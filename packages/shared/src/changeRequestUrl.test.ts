@@ -82,6 +82,21 @@ describe("parseChangeRequestUrl", () => {
     });
   });
 
+  it("reads an Arcanum review as the arcadia repository", () => {
+    expect(parseChangeRequestUrl("https://a.yandex-team.ru/review/15750946")).toEqual({
+      host: "a.yandex-team.ru",
+      repository: "arcadia",
+      number: 15750946,
+    });
+    expect(parseChangeRequestUrl("https://a.yandex-team.ru/review/15750946/files?x=1")).toEqual({
+      host: "a.yandex-team.ru",
+      repository: "arcadia",
+      number: 15750946,
+    });
+    expect(parseChangeRequestUrl("https://a.yandex-team.ru/arcadia/pull/15750946")).toBeNull();
+    expect(parseChangeRequestUrl("https://a.yandex-team.ru/arc/trunk/arcadia")).toBeNull();
+  });
+
   it("claims nothing it cannot be sure of", () => {
     for (const link of [
       "https://github.com/t3tools/t3code/issues/123",
@@ -143,6 +158,12 @@ describe("siblingPullRequestUrl", () => {
   ])("builds a canonical sibling of %s", (url, expected) => {
     expect(siblingPullRequestUrl(url, 43)).toBe(expected);
   });
+  it("moves between Arcanum reviews", () => {
+    expect(siblingPullRequestUrl("https://a.yandex-team.ru/review/15750946?tab=files", 7)).toBe(
+      "https://a.yandex-team.ru/review/7",
+    );
+  });
+
   it("rejects non-PR URLs and invalid numbers", () => {
     expect(siblingPullRequestUrl("https://github.com/acme/web/issues/42", 43)).toBeNull();
     expect(siblingPullRequestUrl("https://github.com/acme/web/pull/42", 0)).toBeNull();
@@ -150,6 +171,12 @@ describe("siblingPullRequestUrl", () => {
 });
 
 describe("changeRequestUrlFor", () => {
+  it("writes the Arcanum review address for arcadia", () => {
+    expect(changeRequestUrlFor("arcanum", "a.yandex-team.ru", "arcadia", 15750946)).toBe(
+      "https://a.yandex-team.ru/review/15750946",
+    );
+  });
+
   it("preserves the origin when the Forgejo host already contains its port", () => {
     expect(
       changeRequestUrlFor(

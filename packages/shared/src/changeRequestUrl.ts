@@ -17,6 +17,9 @@ export interface ChangeRequestLink {
   readonly authority?: string;
 }
 
+const ARCANUM_REVIEW_HOST = "a.yandex-team.ru";
+const ARCANUM_REPOSITORY = "arcadia";
+
 /** The host itself, one of its subdomains, or an install named after the provider. */
 function isHostOf(hostname: string, apex: string, label?: string): boolean {
   if (hostname === apex || hostname.endsWith(`.${apex}`)) return true;
@@ -63,6 +66,15 @@ export function parseChangeRequestUrl(targetUrl: string): ChangeRequestLink | nu
   // separator is GitLab's own, so the hostname is not asked about.
   const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
   if (gitlab) return claim(host, gitlab);
+  // Arcanum: /review/{n}. Arcadia is one monorepo, so the review UI names no repository;
+  // "arcadia" is the repository name the project identity records for arc checkouts.
+  if (host === ARCANUM_REVIEW_HOST) {
+    const match = /^\/review\/(\d+)(?:\/|$)/u.exec(url.pathname);
+    const number = Number(match?.[1]);
+    return match && Number.isSafeInteger(number) && number > 0
+      ? { host, repository: ARCANUM_REPOSITORY, number }
+      : null;
+  }
   // Bitbucket Cloud: /{workspace}/{repo}/pull-requests/{n}
   if (isHostOf(host, "bitbucket.org", "bitbucket")) {
     const match = /^\/([^/]+\/[^/]+)\/pull-requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
@@ -117,6 +129,8 @@ export function changeRequestUrlFor(
       return `https://${host}/${repository}/pull-requests/${number}`;
     case "azure-devops":
       return `https://${canonicalRepositoryKey(`${host}/${repository}`.toLowerCase())}/pullrequest/${number}`;
+    case "arcanum":
+      return `https://${ARCANUM_REVIEW_HOST}/review/${number}`;
     default:
       return null;
   }
@@ -208,6 +222,8 @@ export function changeRequestRepositoryUrl(targetUrl: string): string | null {
   const changeRequest = parseChangeRequestUrl(targetUrl);
   if (changeRequest === null) return null;
   const url = new URL(targetUrl);
+  // An Arcanum review page names no repository; the host root is the nearest thing.
+  if (url.hostname.toLowerCase() === ARCANUM_REVIEW_HOST) return `https://${ARCANUM_REVIEW_HOST}/`;
   const repositoryPath =
     /^(.*?)\/-\/merge_requests\/\d+(?:\/|$)/iu.exec(url.pathname)?.[1] ??
     /^(.*?)(?:\/pulls?\/\d+|\/-\/merge_requests\/\d+|\/pull-requests\/\d+|\/pullrequest\/\d+)(?:\/|$)/iu.exec(
@@ -224,6 +240,12 @@ export function siblingPullRequestUrl(url: string, number: number): string | nul
   const reference = parseChangeRequestUrl(url);
   if (reference === null || !Number.isSafeInteger(number) || number < 1) return null;
   const sibling = new URL(url);
+  if (sibling.hostname.toLowerCase() === ARCANUM_REVIEW_HOST) {
+    sibling.pathname = `/review/${number}`;
+    sibling.search = "";
+    sibling.hash = "";
+    return sibling.toString();
+  }
   const route = /^\/(-\/merge_requests|pulls?|pull-requests|pullrequest)\/\d+(?:\/|$)/u.exec(
     sibling.pathname.slice(reference.repository.length + 1),
   )?.[1];
