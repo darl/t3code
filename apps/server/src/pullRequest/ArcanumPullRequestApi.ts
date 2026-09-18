@@ -515,7 +515,7 @@ export const make = Effect.gen(function* () {
       input.body === undefined
         ? base
         : base.pipe(HttpClientRequest.bodyText(input.body, "application/json"));
-    return httpClient
+    const send = httpClient
       .execute(withBody.pipe(HttpClientRequest.setHeader("authorization", `OAuth ${token.value}`)))
       .pipe(
         Effect.mapError(
@@ -540,6 +540,12 @@ export const make = Effect.gen(function* () {
           })(response),
         ),
       );
+    // The token's budget is one for the CLI and the API together, so a request waits its
+    // turn in the CLI's queue: a sweep of many summaries then trickles at the allowed pace
+    // instead of bursting into 429s that pause every reader for minutes.
+    return cli.paced(send, {
+      rateLimited: (error) => error._tag === "ArcanumResponseError" && error.status === 429,
+    });
   };
 
   const requestJson = <A>(input: {

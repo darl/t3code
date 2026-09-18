@@ -36,7 +36,9 @@ const mockedHttp =
 
 function makeLayer(env: Record<string, string>) {
   return ArcanumPullRequestApi.layer.pipe(
-    Layer.provide(Layer.mock(ArcanumCli.ArcanumCli)({ execute: mockedExecute })),
+    Layer.provide(
+      Layer.mock(ArcanumCli.ArcanumCli)({ execute: mockedExecute, paced: (effect) => effect }),
+    ),
     Layer.provide(
       Layer.succeed(
         HttpClient.HttpClient,

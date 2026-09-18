@@ -301,6 +301,53 @@ describe("ArcanumCli.listPullRequests", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("queues reads from another client behind the CLI's own and pauses them on a 429", () =>
+    Effect.gen(function* () {
+      const startedAt: number[] = [];
+      answer({
+        "user-info": () => Effect.succeed(output("Effective login: alice\n")),
+        "pr list": () => Effect.succeed(output("")),
+        "pr status": () =>
+          Effect.gen(function* () {
+            startedAt.push(yield* Clock.currentTimeMillis);
+            return yield* Effect.fail(exitError("not-found", "no pull request"));
+          }),
+      });
+      const arc = yield* ArcanumCli.ArcanumCli;
+      // The same call shape an HTTP read has: an effect with its own failure type.
+      let httpCalls = 0;
+      const httpRead = (status: number) =>
+        arc.paced(
+          Effect.gen(function* () {
+            startedAt.push(yield* Clock.currentTimeMillis);
+            httpCalls += 1;
+            return status === 200 ? { status } : yield* Effect.fail({ status });
+          }),
+          { rateLimited: (error) => error.status === 429 },
+        );
+
+      const results = yield* paced(
+        Effect.all(
+          [
+            arc.listPullRequests({ cwd: CWD, headBranch: "a", state: "all" }),
+            httpRead(429).pipe(Effect.catch(() => Effect.succeed("rate-limited" as const))),
+            httpRead(200),
+            arc.listPullRequests({ cwd: CWD, headBranch: "b", state: "all" }),
+          ],
+          { concurrency: "unbounded" },
+        ),
+      );
+
+      expect(httpCalls).toBe(2);
+      expect(results[1]).toBe("rate-limited");
+      expect(results[2]).toEqual({ status: 200 });
+      // Every read took its turn; the one after the 429 waited out the cooldown.
+      const gaps = startedAt.slice(1).map((at, index) => at - startedAt[index]!);
+      expect(gaps.every((gap) => gap >= ArcanumCli.MIN_API_SPACING_MS)).toBe(true);
+      expect(gaps.some((gap) => gap >= ArcanumCli.RATE_LIMIT_COOLDOWN_MS)).toBe(true);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("pauses every reader after a 429 so queued lookups retry once the limit clears", () =>
     Effect.gen(function* () {
       let sweeps = 0;

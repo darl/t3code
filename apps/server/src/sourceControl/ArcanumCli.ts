@@ -278,6 +278,17 @@ export class ArcanumCli extends Context.Service<
       readonly reference: string;
       readonly force?: boolean;
     }) => Effect.Effect<void, ArcanumCliError>;
+
+    /**
+     * Runs one Arcanum read from another client (the HTTP API) under the same pacing gate
+     * the CLI reads use. Arcanum meters the token, not the client, so every read of it has
+     * to take its turn in one queue; `rateLimited` tells the gate which failures mean the
+     * limit was hit, so the queue pauses for the cooldown rather than the usual spacing.
+     */
+    readonly paced: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+      options: { readonly rateLimited: (error: E) => boolean },
+    ) => Effect.Effect<A, E, R>;
   }
 >()("t3/sourceControl/ArcanumCli") {}
 
@@ -333,7 +344,7 @@ export const make = Effect.gen(function* () {
   const nextApiSlotMillis = yield* Ref.make(0);
   const holdApiSlot = (millis: number) =>
     Clock.currentTimeMillis.pipe(Effect.flatMap((now) => Ref.set(nextApiSlotMillis, now + millis)));
-  const gated = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
+  const paced: ArcanumCli["Service"]["paced"] = (effect, options) =>
     apiGate.withPermits(1)(
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
@@ -342,15 +353,13 @@ export const make = Effect.gen(function* () {
         return yield* effect.pipe(
           Effect.tap(() => holdApiSlot(MIN_API_SPACING_MS)),
           Effect.tapError((error) =>
-            holdApiSlot(
-              error._tag === "ArcanumCliRateLimitError"
-                ? RATE_LIMIT_COOLDOWN_MS
-                : MIN_API_SPACING_MS,
-            ),
+            holdApiSlot(options.rateLimited(error) ? RATE_LIMIT_COOLDOWN_MS : MIN_API_SPACING_MS),
           ),
         );
       }),
     );
+  const gated = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
+    paced(effect, { rateLimited: (error) => error._tag === "ArcanumCliRateLimitError" });
 
   const statusPullRequest = (input: {
     readonly cwd: string;
@@ -525,6 +534,7 @@ export const make = Effect.gen(function* () {
 
   return ArcanumCli.of({
     execute,
+    paced,
     // Arcanum has at most one PR per source branch. The cached sweep is
     // consulted first and the per-branch probe only when the sweep has
     // nothing for the branch, which keeps the steady-state Arcanum load at
