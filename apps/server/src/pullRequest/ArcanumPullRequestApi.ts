@@ -47,12 +47,12 @@ const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
 
 const ArcanumApiEnvConfig = Config.all({
-  baseUrl: Config.string("T3CODE_ARCANUM_API_BASE_URL").pipe(
+  baseUrl: Config.String("T3CODE_ARCANUM_API_BASE_URL").pipe(
     Config.withDefault(DEFAULT_API_BASE_URL),
   ),
-  token: Config.string("ARC_TOKEN").pipe(Config.option),
-  tokenPath: Config.string("ARC_TOKEN_PATH").pipe(Config.option),
-  home: Config.string("HOME").pipe(Config.option),
+  token: Config.String("ARC_TOKEN").pipe(Config.option),
+  tokenPath: Config.String("ARC_TOKEN_PATH").pipe(Config.option),
+  home: Config.String("HOME").pipe(Config.option),
 });
 
 /**
