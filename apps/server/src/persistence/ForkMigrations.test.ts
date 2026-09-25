@@ -1,13 +1,13 @@
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { reconcileForkLedger, runForkMigrations } from "./ForkMigrations.ts";
 import { runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
+// Each test gets its own database: the ledger tests must start from scratch.
+const FreshSqlite = NodeSqliteClient.layer({ filename: ":memory:" });
 
 const insertLink = (row: {
   readonly threadId: string;
@@ -51,7 +51,7 @@ const readUpstreamLedger = Effect.gen(function* () {
   return rows.map((row) => `${row.migration_id}_${row.name}`);
 });
 
-layer("ForkMigrations", (it) => {
+describe("ForkMigrations", () => {
   it.effect("001 folds review-host links onto the arcadia key, keeping the synced copy", () =>
     Effect.gen(function* () {
       yield* runMigrations();
@@ -82,7 +82,7 @@ layer("ForkMigrations", (it) => {
       // Running again is a no-op: the fork ledger remembers it.
       assert.deepStrictEqual(yield* runForkMigrations(), []);
       assert.deepStrictEqual(yield* readLinks, expected);
-    }),
+    }).pipe(Effect.provide(FreshSqlite)),
   );
 
   it.effect("reconcile frees the shared id an earlier fork build recorded", () =>
@@ -111,7 +111,7 @@ layer("ForkMigrations", (it) => {
       assert.deepStrictEqual(yield* readLinks, [
         { thread_id: "two", host: "arcadia", number: 2, snapshot_json: null },
       ]);
-    }),
+    }).pipe(Effect.provide(FreshSqlite)),
   );
 
   it.effect("reconcile is a no-op on a fresh database", () =>
@@ -120,6 +120,6 @@ layer("ForkMigrations", (it) => {
       yield* runMigrations();
       yield* runForkMigrations();
       assert.include(yield* readUpstreamLedger, "54_ProjectionThreadsAutoSettleDisabledAt");
-    }),
+    }).pipe(Effect.provide(FreshSqlite)),
   );
 });
