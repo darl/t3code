@@ -5,6 +5,7 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
+import { reconcileForkLedger, runForkMigrations } from "../ForkMigrations.ts";
 import { runMigrations } from "../Migrations.ts";
 import { ServerConfig } from "../../config.ts";
 
@@ -15,7 +16,9 @@ const setup = Layer.effectDiscard(
     yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
+    yield* reconcileForkLedger();
     yield* runMigrations();
+    yield* runForkMigrations();
   }),
 );
 
