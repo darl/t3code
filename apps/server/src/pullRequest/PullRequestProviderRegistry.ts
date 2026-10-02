@@ -3,11 +3,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { SourceControlProviderKind } from "@t3tools/contracts";
 
+import * as ArcanumCli from "../sourceControl/ArcanumCli.ts";
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
+import * as ArcanumPullRequestApi from "./ArcanumPullRequestApi.ts";
+import * as ArcanumPullRequestProvider from "./ArcanumPullRequestProvider.ts";
 import * as ForgejoCli from "../sourceControl/ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
@@ -53,6 +56,7 @@ export const make = Effect.map(
     ForgejoPullRequestProvider.make,
     BitbucketPullRequestProvider.make,
     AzureDevOpsPullRequestProvider.make,
+    ArcanumPullRequestProvider.make,
   ]),
   fromProviders,
 );
@@ -68,4 +72,5 @@ export const layer = Layer.effect(PullRequestProviderRegistry, make).pipe(
   Layer.provide(ForgejoCli.layer),
   Layer.provide(BitbucketPullRequestApi.layer.pipe(Layer.provide(BitbucketApi.layer))),
   Layer.provide(AzureDevOpsPullRequestCli.layer.pipe(Layer.provide(AzureDevOpsCli.layer))),
+  Layer.provide(ArcanumPullRequestApi.layer.pipe(Layer.provide(ArcanumCli.layer))),
 );

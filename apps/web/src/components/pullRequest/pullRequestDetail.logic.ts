@@ -135,6 +135,9 @@ export function pullRequestCheckoutCommand(
       }
       return `git clone --single-branch --branch ${headBranch} https://bitbucket.org/${headRepositoryNameWithOwner}.git t3code-pr-${number}`;
     }
+    // Arcanum checks out by review request id, the same command ArcanumCli runs.
+    case "arcanum":
+      return `arc pr checkout ${number}`;
     case "unknown":
       return null;
   }

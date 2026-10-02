@@ -1289,6 +1289,12 @@ const PROVIDER_REQUIREMENT: Partial<
     unauthenticated:
       "Bitbucket rejected the configured credentials. Check them in Settings → Source Control.",
   },
+  arcanum: {
+    missing:
+      "Arc CLI (`arc`) is required to browse change requests on this host. Install arc and mount the repository, then retry.",
+    unauthenticated:
+      "Arcanum rejected the credentials. Run `arc token store` (or set ARC_TOKEN) and retry.",
+  },
 };
 
 /**

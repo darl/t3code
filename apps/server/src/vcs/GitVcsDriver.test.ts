@@ -28,7 +28,9 @@ const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-git-vcs-contract-",
 });
 const GitContractLayer = Layer.mergeAll(GitVcsDriver.vcsLayer, GitVcsDriver.layer).pipe(
-  Layer.provide(ServerConfigLayer),
+  // provideMerge, not provide: the fork's CheckpointStore reads ServerConfig
+  // (arc shadow checkpoints), so the checkpoint tests below must see it too.
+  Layer.provideMerge(ServerConfigLayer),
   Layer.provideMerge(VcsProcess.layer),
   Layer.provideMerge(NodeServices.layer),
 );

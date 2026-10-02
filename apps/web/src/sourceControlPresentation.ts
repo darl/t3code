@@ -13,6 +13,7 @@ import {
   type ChangeRequestTerminology,
 } from "@t3tools/shared/sourceControl";
 import {
+  ArcanumIcon,
   AzureDevOpsIcon,
   BitbucketIcon,
   ForgejoIcon,
@@ -61,6 +62,12 @@ export function getSourceControlPresentation(
         providerName: provider?.name || presentation.providerName,
         terminology: getChangeRequestTerminology(provider),
         Icon: BitbucketIcon,
+      };
+    case "arcanum":
+      return {
+        providerName: provider?.name || presentation.providerName,
+        terminology: getChangeRequestTerminology(provider),
+        Icon: ArcanumIcon,
       };
     case "change-request":
       return {

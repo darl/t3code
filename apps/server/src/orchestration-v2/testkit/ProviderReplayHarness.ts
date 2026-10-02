@@ -318,6 +318,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   );
   const checkpointStoreLayer = CheckpointStore.layer.pipe(
     Layer.provide(vcsDriverRegistryLayer),
+    Layer.provide(serverConfigLayer),
     Layer.provide(NodeServices.layer),
   );
   const checkpointServiceProvided = CheckpointService.layer.pipe(

@@ -70,6 +70,10 @@ import { detachStackFrame } from "./detachStackFrame.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import {
+  ARCADIA_CANONICAL_KEY,
+  ARCANUM_REVIEW_HOST,
+} from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { detectPrTemplate } from "../sourceControl/PrTemplateDetection.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
@@ -127,6 +131,10 @@ export class GitManager extends Context.Service<
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+    readonly resolveWorktreeThreadPath: (input: {
+      readonly cwd: string;
+      readonly worktreePath: string;
+    }) => Effect.Effect<string>;
     readonly runStackedAction: (
       input: GitRunStackedActionInput,
       options?: GitRunStackedActionOptions,
@@ -233,6 +241,11 @@ interface BranchHeadContext {
 export function pullRequestRepositoryKey(value: string): string | null {
   try {
     const url = new URL(value);
+    // Arcanum's review URLs carry no repository path: every review belongs
+    // to the one arcadia monorepo, whose identity is a constant.
+    if (url.hostname === ARCANUM_REVIEW_HOST && /^\/review\/\d+(?:\/.*)?$/u.test(url.pathname)) {
+      return ARCADIA_CANONICAL_KEY;
+    }
     const match =
       /^(.*)(?:\/pull\/|\/-\/merge_requests\/|\/pull-requests\/|\/pullrequest\/)\d+(?:\/.*)?$/iu.exec(
         url.pathname,
@@ -1000,6 +1013,46 @@ export const make = Effect.gen(function* () {
   const canonicalizeExistingPath = (value: string) =>
     fileSystem.realPath(value).pipe(Effect.orElseSucceed(() => value));
   const normalizeStatusCacheKey = canonicalizeExistingPath;
+
+  // Threads created from a project rooted in a repository subdirectory should
+  // land in that same subdirectory of the worktree, not at the worktree root.
+  // Best-effort: any resolution failure falls back to the given worktree path.
+  const resolveWorktreeThreadPath = Effect.fn("resolveWorktreeThreadPath")(function* (input: {
+    readonly cwd: string;
+    readonly worktreePath: string;
+  }) {
+    const toplevelResult = yield* gitCore
+      .execute({
+        operation: "GitManager.resolveWorktreeThreadPath",
+        cwd: input.cwd,
+        args: ["rev-parse", "--show-toplevel"],
+        timeoutMs: 5_000,
+        allowNonZeroExit: true,
+      })
+      .pipe(Effect.orElseSucceed(() => null));
+    if (toplevelResult === null || toplevelResult.exitCode !== 0) {
+      return input.worktreePath;
+    }
+    const toplevel = toplevelResult.stdout.trim();
+    if (toplevel.length === 0) {
+      return input.worktreePath;
+    }
+    const projectCwd = yield* canonicalizeExistingPath(input.cwd);
+    const relativeSubpath = path.relative(yield* canonicalizeExistingPath(toplevel), projectCwd);
+    if (
+      relativeSubpath.length === 0 ||
+      relativeSubpath.startsWith("..") ||
+      path.isAbsolute(relativeSubpath)
+    ) {
+      return input.worktreePath;
+    }
+    const threadPath = path.join(input.worktreePath, relativeSubpath);
+    const threadPathIsDirectory = yield* fileSystem.stat(threadPath).pipe(
+      Effect.map((info) => info.type === "Directory"),
+      Effect.orElseSucceed(() => false),
+    );
+    return threadPathIsDirectory ? threadPath : input.worktreePath;
+  });
   const nonRepositoryStatusDetails: GitVcsDriver.GitStatusDetails = {
     isRepo: false,
     hasOriginRemote: false,
@@ -1791,7 +1844,16 @@ export const make = Effect.gen(function* () {
       const upstreamBranch = extractBranchNameFromRemoteRef(upstreamRef, {
         remoteName: headContext.remoteName,
       });
-      if (upstreamBranch.length > 0 && upstreamBranch !== branch) {
+      // An arc checkout publishes local branch X as users/<login>/X, so the upstream of every
+      // arc branch is a publish alias of the branch itself — never a merge base. When the
+      // upstream is users/<login>/ plus exactly the local name, skip the stacked-branch
+      // heuristic and fall through to the provider default (trunk on Arcanum). This also
+      // covers a local branch literally named users/<login>/foo, whose alias doubles the
+      // prefix; a genuine stacked base spelled users/<login>/<the local name> is not a
+      // realistic loss.
+      const publishAlias = /^users\/[^/]+\/(.+)$/.exec(upstreamBranch);
+      const isArcPublishAlias = publishAlias?.[1] === branch;
+      if (upstreamBranch.length > 0 && upstreamBranch !== branch && !isArcPublishAlias) {
         return upstreamBranch;
       }
     }
@@ -2422,7 +2484,7 @@ export const make = Effect.gen(function* () {
           return {
             pullRequest,
             branch: localPullRequestBranch,
-            worktreePath,
+            worktreePath: yield* resolveWorktreeThreadPath({ cwd: input.cwd, worktreePath }),
             isOnPullRequestHead: false,
           };
         }
@@ -2496,7 +2558,7 @@ export const make = Effect.gen(function* () {
         return {
           pullRequest,
           branch: localPullRequestBranch,
-          worktreePath,
+          worktreePath: yield* resolveWorktreeThreadPath({ cwd: input.cwd, worktreePath }),
           isOnPullRequestHead: refreshed.onTarget,
         };
       });
@@ -2597,7 +2659,10 @@ export const make = Effect.gen(function* () {
       return {
         pullRequest,
         branch: worktree.worktree.refName,
-        worktreePath: worktree.worktree.path,
+        worktreePath: yield* resolveWorktreeThreadPath({
+          cwd: input.cwd,
+          worktreePath: worktree.worktree.path,
+        }),
         isOnPullRequestHead: true,
       };
     }).pipe(Effect.ensuring(invalidateStatus(input.cwd)));
@@ -2857,6 +2922,7 @@ export const make = Effect.gen(function* () {
     invalidateStatus,
     resolvePullRequest,
     preparePullRequestThread,
+    resolveWorktreeThreadPath,
     runStackedAction,
   });
 });

@@ -3199,12 +3199,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    yield* executeGit(
+    const added = yield* executeGit(
       "GitVcsDriver.createWorktree",
       input.cwd,
       ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
       {
-        fallbackErrorDetail: "git worktree add failed",
+        allowNonZeroExit: true,
         timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
         ...(onCheckoutProgress
           ? {
@@ -3221,6 +3221,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : {}),
       },
     );
+    if (added.exitCode !== 0) {
+      // The user picked the base ref and sees this message; git's own reason
+      // ("invalid reference", "already exists", ...) is what lets them fix it.
+      const reason = added.stderr.trim().split("\n").slice(0, 3).join("\n").slice(0, 400);
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation: "GitVcsDriver.createWorktree", cwd: input.cwd, args }),
+        detail:
+          reason.length > 0 ? `git worktree add failed: ${reason}` : "git worktree add failed",
+        ...(added.exitCode === null ? {} : { exitCode: added.exitCode }),
+        stdoutLength: added.stdout.length,
+        stderrLength: added.stderr.length,
+      });
+    }
 
     if (progress?.onWorktreeClaimed) {
       yield* progress.onWorktreeClaimed(worktreePath);
@@ -3562,11 +3575,26 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const removeWorktree: GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"] = Effect.fn(
     "removeWorktree",
   )(function* (input) {
+    // Thread worktree paths may point into a subdirectory of the worktree
+    // (subdirectory-rooted projects); `git worktree remove` needs the root.
+    const toplevelResult = yield* executeGit(
+      "GitVcsDriver.removeWorktree.toplevel",
+      input.path,
+      ["rev-parse", "--show-toplevel"],
+      {
+        timeoutMs: 5_000,
+        allowNonZeroExit: true,
+      },
+    ).pipe(Effect.orElseSucceed(() => null));
+    const toplevel =
+      toplevelResult !== null && toplevelResult.exitCode === 0 ? toplevelResult.stdout.trim() : "";
     const args = ["worktree", "remove"];
     if (input.force) {
       args.push("--force");
     }
-    args.push(input.path);
+    // The one fork divergence here: a subdirectory-rooted thread path removes
+    // by the worktree's own root, resolved above.
+    args.push(toplevel.length > 0 ? toplevel : input.path);
     const result = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.removeWorktree",
       input.cwd,

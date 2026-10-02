@@ -28,6 +28,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 
+import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -211,6 +212,17 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
   };
 
   const dependencies = Layer.mergeAll(
+    Layer.mock(ProjectService.ProjectService)({
+      listShells: (options) =>
+        Ref.get(snapshots).pipe(
+          Effect.map((snapshot) =>
+            snapshot.projects.filter(
+              (project) =>
+                options?.projectIds === undefined || options.projectIds.includes(project.id),
+            ),
+          ),
+        ),
+    }),
     Layer.mock(PullRequestService.PullRequestService)({
       summary,
       stack,
@@ -481,6 +493,61 @@ describe("PullRequestSyncReactor", () => {
           assert.strictEqual((yield* Ref.get(fixture.stackCalls)).length, 1);
           // Reads only linked threads, never the full shell snapshot of every thread.
           assert.strictEqual(yield* Ref.get(fixture.shellSnapshotReads), 0);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("rewrites a link whose url no host shape explains, using the project's provider", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const badLink = makeLink(15750946, null, {
+          host: "a.yandex-team.ru",
+          repository: "arcadia",
+          url: "https://a.yandex-team.ru/arcadia/pull/15750946",
+          source: "agent",
+        });
+        const snapshot = makeSnapshot([makeThread("one", { pullRequests: [badLink] })]);
+        const fixture = yield* makeHarness({
+          snapshot: {
+            ...snapshot,
+            projects: [
+              {
+                ...makeProject(),
+                repositoryIdentity: {
+                  canonicalKey: "a.yandex-team.ru/arcadia",
+                  locator: {
+                    source: "git-remote",
+                    remoteName: "arcadia",
+                    remoteUrl: "arc://arcadia/arcadia",
+                  },
+                  provider: "arcanum",
+                },
+              },
+            ],
+          },
+        });
+
+        yield* Effect.gen(function* () {
+          yield* startAndSweep(fixture);
+
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.linkCommands)).map(({ commandId: _, ...rest }) => rest),
+            [
+              {
+                type: "thread.pull-request.link",
+                threadId: ThreadId.make("one"),
+                // The corrected link carries the checkout's own key host, so it routes to
+                // the project rather than to the review UI's hostname.
+                host: "arcadia",
+                repository: "arcadia",
+                number: 15750946,
+                url: "https://a.yandex-team.ru/review/15750946",
+                source: "agent",
+              },
+            ],
+          );
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),

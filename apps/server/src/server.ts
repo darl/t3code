@@ -54,6 +54,7 @@ import * as OpenCodeServerLedger from "./provider/OpenCodeServerLedger.ts";
 import { AcpRegistryCatalogLive } from "./provider/Layers/AcpRegistryCatalog.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
+import * as ArcanumCli from "./sourceControl/ArcanumCli.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
@@ -270,6 +271,7 @@ const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
 const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      ArcanumCli.layer,
       AzureDevOpsCli.layer,
       BitbucketApi.layer,
       GitHubCli.layer,
@@ -518,6 +520,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
     }),
   ).pipe(
     Layer.provideMerge(PullRequestSyncReactor.layer),
+    Layer.provide(ProjectServiceLayerLive),
     Layer.provide(PullRequestServiceLive),
     Layer.provide(ProjectionStoreV2.layer),
   ),
