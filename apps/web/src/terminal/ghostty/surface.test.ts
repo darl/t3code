@@ -167,7 +167,14 @@ describe("GhosttyTerminalSurface visibility", () => {
       resize() {
         for (const callback of resizeCallbacks) callback();
       },
-      pointer(type: string, clientX: number, buttons: number, shiftKey = false, button = 0) {
+      pointer(
+        type: string,
+        clientX: number,
+        buttons: number,
+        shiftKey = false,
+        button = 0,
+        modifiers: { ctrlKey?: boolean; metaKey?: boolean } = {},
+      ) {
         canvas.dispatchEvent(
           Object.assign(new Event(type, { cancelable: true }), {
             clientX,
@@ -176,6 +183,9 @@ describe("GhosttyTerminalSurface visibility", () => {
             button,
             buttons,
             shiftKey,
+            ctrlKey: false,
+            metaKey: false,
+            ...modifiers,
           }),
         );
       },
@@ -318,6 +328,62 @@ describe("GhosttyTerminalSurface visibility", () => {
 
     expect(onLinkActivate).not.toHaveBeenCalled();
     expect(surface.getSelection()).toBe("https");
+  });
+
+  it("does not open file paths with an ordinary click", async () => {
+    const harness = createHarness();
+    const onLinkActivate = vi.fn();
+    const surface = await harness.create({ onLinkActivate });
+    surface.write("/tmp/file.ts");
+    harness.flushFrame();
+
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointerup", 5, 0);
+    expect(onLinkActivate).not.toHaveBeenCalled();
+  });
+
+  it("selects file paths with an ordinary drag", async () => {
+    const harness = createHarness();
+    const onLinkActivate = vi.fn();
+    const surface = await harness.create({ onLinkActivate });
+    surface.write("/tmp/file.ts");
+    harness.flushFrame();
+
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointermove", 37, 1);
+    harness.pointer("pointerup", 37, 0);
+    expect(onLinkActivate).not.toHaveBeenCalled();
+    expect(surface.getSelection()).toBe("/tmp/");
+  });
+
+  it.each([{ ctrlKey: true }, { metaKey: true }])(
+    "opens file paths with a modifier click: %j",
+    async (modifiers) => {
+      const harness = createHarness();
+      const onLinkActivate = vi.fn();
+      const surface = await harness.create({ onLinkActivate });
+      surface.write("/tmp/file.ts");
+      harness.flushFrame();
+
+      harness.pointer("pointerdown", 5, 1, false, 0, modifiers);
+      harness.pointer("pointerup", 5, 0, false, 0, modifiers);
+      expect(onLinkActivate).toHaveBeenCalledWith("/tmp/file.ts", expect.any(Event));
+      expect(onLinkActivate).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps Shift selection available over file paths with a modifier", async () => {
+    const harness = createHarness();
+    const onLinkActivate = vi.fn();
+    const surface = await harness.create({ onLinkActivate });
+    surface.write("/tmp/file.ts");
+    harness.flushFrame();
+
+    harness.pointer("pointerdown", 5, 1, true, 0, { ctrlKey: true });
+    harness.pointer("pointermove", 37, 1, true, 0, { ctrlKey: true });
+    harness.pointer("pointerup", 37, 0, true, 0, { ctrlKey: true });
+    expect(onLinkActivate).not.toHaveBeenCalled();
+    expect(surface.getSelection()).toBe("/tmp/");
   });
 
   it("keeps a link click active through slight pointer movement", async () => {

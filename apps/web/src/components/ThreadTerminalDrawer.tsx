@@ -835,9 +835,12 @@ export function TerminalViewport({
             return;
           }
           const error = squashAtomCommandFailure(result);
-          writeSystemMessage(
-            latestTerminal,
-            error instanceof Error ? error.message : "Unable to open path",
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Unable to open file",
+              description: error instanceof Error ? error.message : "Unable to open path",
+            }),
           );
         })();
       }
