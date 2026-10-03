@@ -47,6 +47,7 @@ import {
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type RuntimeMode,
+  type ProjectId,
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
   type ServerProvider,
@@ -68,6 +69,8 @@ import {
 } from "../orchestration-v2/SubagentProjection.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
@@ -177,19 +180,6 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Workspace strategy for a scheduled task created/updated over MCP: bound runs
- * post into the existing thread (the strategy is unused, keep root); unbound
- * runs launch a fresh worktree per run.
- */
-function scheduledTaskWorkspaceStrategy(
-  boundToThread: boolean,
-): ScheduledTask["workspaceStrategy"] {
-  return boundToThread
-    ? { type: "root" }
-    : { type: "worktree", baseRef: "main", startFromOrigin: true };
 }
 
 function scheduledTaskSummary(task: ScheduledTask): OrchestratorMcpScheduledTask {
@@ -756,6 +746,46 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+  const projects = yield* ProjectService.ProjectService;
+  const git = yield* GitVcsDriver.GitVcsDriver;
+
+  const scheduledTaskWorkspaceStrategy = Effect.fn(
+    "OrchestratorMcpService.scheduledTaskWorkspaceStrategy",
+  )(function* (boundToThread: boolean, projectId: ProjectId) {
+    if (boundToThread) return { type: "root" } as const;
+    const project = yield* projects.getById(projectId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorMcpFailure({
+            code: "orchestration_error",
+            message: `Could not load the scheduled task project: ${errorMessage(cause)}`,
+          }),
+      ),
+    );
+    if (Option.isNone(project)) {
+      return yield* new OrchestratorMcpFailure({
+        code: "invalid_request",
+        message: "The scheduled task project was not found.",
+      });
+    }
+    const baseRef = yield* git.resolveDefaultBranchName(project.value.workspaceRoot, "origin").pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorMcpFailure({
+            code: "orchestration_error",
+            message: `Could not determine the repository's default branch for scheduled worktrees: ${errorMessage(cause)}`,
+          }),
+      ),
+    );
+    if (baseRef === null) {
+      return yield* new OrchestratorMcpFailure({
+        code: "invalid_request",
+        message:
+          "Could not determine the repository's default branch for scheduled worktrees. Configure origin/HEAD before creating an unbound scheduled task.",
+      });
+    }
+    return { type: "worktree", baseRef, startFromOrigin: true } as const;
+  });
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -1200,7 +1230,10 @@ const make = Effect.gen(function* () {
           schedule: input.schedule,
           projectId: parent.thread.projectId,
           threadId: bindToCurrentThread ? scope.threadId : null,
-          workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
+          workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(
+            bindToCurrentThread,
+            parent.thread.projectId,
+          ),
           modelSelection: parent.thread.modelSelection,
           runtimeMode: parent.thread.runtimeMode,
           interactionMode: parent.thread.interactionMode,
@@ -1265,7 +1298,7 @@ const make = Effect.gen(function* () {
         const workspaceStrategy =
           input.bindToCurrentThread === undefined
             ? existing.workspaceStrategy
-            : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+            : yield* scheduledTaskWorkspaceStrategy(input.bindToCurrentThread, existing.projectId);
         const upsertInput: ScheduledTaskUpsertInput = {
           id: existing.id,
           title: input.title ?? existing.title,
@@ -1947,4 +1980,6 @@ export const layer: Layer.Layer<
   | ProviderRegistry.ProviderRegistry
   | ProviderAdapterRegistry.ProviderAdapterRegistryV2
   | ScheduledTaskService.ScheduledTaskService
+  | ProjectService.ProjectService
+  | GitVcsDriver.GitVcsDriver
 > = Layer.effect(OrchestratorMcpService, make);
