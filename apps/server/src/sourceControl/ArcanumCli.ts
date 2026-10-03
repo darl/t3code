@@ -309,7 +309,7 @@ export const make = Effect.gen(function* () {
         timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
       })
-      .pipe(Effect.mapError(mapError));
+      .pipe(Effect.mapError(mapError), Effect.withSpan("ArcanumCli.command"));
 
   const execute: ArcanumCli["Service"]["execute"] = (input) =>
     run(input, (error) =>
@@ -345,19 +345,26 @@ export const make = Effect.gen(function* () {
   const holdApiSlot = (millis: number) =>
     Clock.currentTimeMillis.pipe(Effect.flatMap((now) => Ref.set(nextApiSlotMillis, now + millis)));
   const paced: ArcanumCli["Service"]["paced"] = (effect, options) =>
-    apiGate.withPermits(1)(
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const slot = yield* Ref.get(nextApiSlotMillis);
-        if (slot > now) yield* Effect.sleep(Duration.millis(slot - now));
-        return yield* effect.pipe(
-          Effect.tap(() => holdApiSlot(MIN_API_SPACING_MS)),
-          Effect.tapError((error) =>
-            holdApiSlot(options.rateLimited(error) ? RATE_LIMIT_COOLDOWN_MS : MIN_API_SPACING_MS),
-          ),
-        );
-      }),
-    );
+    Effect.gen(function* () {
+      const queuedAt = yield* Clock.currentTimeMillis;
+      return yield* apiGate.withPermits(1)(
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          yield* Effect.annotateCurrentSpan("arcanum.queue_wait_ms", now - queuedAt);
+          const slot = yield* Ref.get(nextApiSlotMillis);
+          const delay = Math.max(0, slot - now);
+          yield* Effect.annotateCurrentSpan("arcanum.pacing_wait_ms", delay);
+          if (delay > 0) yield* Effect.sleep(Duration.millis(delay));
+          return yield* effect.pipe(
+            Effect.withSpan("ArcanumCli.apiRead"),
+            Effect.tap(() => holdApiSlot(MIN_API_SPACING_MS)),
+            Effect.tapError((error) =>
+              holdApiSlot(options.rateLimited(error) ? RATE_LIMIT_COOLDOWN_MS : MIN_API_SPACING_MS),
+            ),
+          );
+        }),
+      );
+    }).pipe(Effect.withSpan("ArcanumCli.paced"));
   const gated = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
     paced(effect, { rateLimited: (error) => error._tag === "ArcanumCliRateLimitError" });
 

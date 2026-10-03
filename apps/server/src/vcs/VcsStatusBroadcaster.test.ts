@@ -212,6 +212,41 @@ describe("VcsStatusBroadcaster", () => {
     },
   );
 
+  it.effect(
+    "background refreshes preserve cached PRs while explicit refreshes discover new ones",
+    () => {
+      let cachedPr = baseRemoteStatus.pr;
+      let local = baseLocalStatus;
+      const layer = VcsStatusBroadcaster.layer.pipe(
+        Layer.provide(NodeServices.layer),
+        Layer.provide(makeBackgroundPolicyLayer(() => true)),
+        Layer.provide(
+          Layer.mock(GitWorkflowService.GitWorkflowService)({
+            localStatus: () => Effect.sync(() => local),
+            remoteStatus: () => Effect.sync(() => ({ ...baseRemoteStatus, pr: cachedPr })),
+            invalidateLocalStatus: () => Effect.void,
+            invalidateRemoteStatus: () => Effect.void,
+            invalidateStatus: () =>
+              Effect.sync(() => {
+                cachedPr = remoteStatusWithPr.pr;
+              }),
+          }),
+        ),
+      );
+      return Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+        local = { ...baseLocalStatus, hasWorkingTreeChanges: true };
+        const background = yield* broadcaster.refreshStatus("/repo", { refreshPullRequest: false });
+        assert.isTrue(background.hasWorkingTreeChanges);
+        assert.isNull(background.pr);
+        const explicit = yield* broadcaster.refreshStatus("/repo");
+        assert.deepStrictEqual(explicit.pr, remoteStatusWithPr.pr);
+        assert.isTrue(explicit.hasWorkingTreeChanges);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    },
+  );
+
   it.effect("reuses the cached VCS status across repeated reads", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,

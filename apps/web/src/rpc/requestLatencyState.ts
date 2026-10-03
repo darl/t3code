@@ -5,6 +5,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { appAtomRegistry } from "./atomRegistry";
 
 export const SLOW_RPC_ACK_THRESHOLD_MS = 15_000;
+const VCS_REFRESH_RPC_ACK_THRESHOLD_MS = 60_000;
 /**
  * Some requests are slow by design — they shell out to a package manager on the
  * server and only respond once the install finishes. Warning about those after
@@ -60,6 +61,9 @@ function shouldTrackRpcAck(method: string): boolean {
 }
 
 function rpcAckThresholdMs(method: string): number {
+  if (method === WS_METHODS.vcsRefreshStatus) {
+    return Math.max(slowRpcAckThresholdMs, VCS_REFRESH_RPC_ACK_THRESHOLD_MS);
+  }
   return longRunningRpcAckMethods.has(method)
     ? Math.max(slowRpcAckThresholdMs, LONG_RUNNING_RPC_ACK_THRESHOLD_MS)
     : slowRpcAckThresholdMs;
