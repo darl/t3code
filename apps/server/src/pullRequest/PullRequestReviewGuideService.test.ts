@@ -340,6 +340,67 @@ const startSingleBranchRun = (input: {
 
 // Runs drive real git, which the test clock does not advance, so waits use real time.
 it.layer(layerBase, { excludeTestServices: true })("PullRequestReviewGuideService", (it) => {
+  it.effect("prepares the exact diff before generation and keeps it until the model finishes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const repositories = yield* makeRepositories;
+        const fs = yield* FileSystem.FileSystem;
+        const seen = yield* Deferred.make<ReviewGuideGenerationInput>();
+        const finish = yield* Deferred.make<void>();
+        const stored = yield* Deferred.make<void>();
+        const evidenceReference = { ...reference, repository: "acme/prepared-evidence" };
+        const context = yield* Layer.build(
+          makeLayer({
+            ...repositories,
+            stored,
+            identity: {
+              ...ACME_APP,
+              canonicalKey: "github.com/acme/prepared-evidence",
+              displayName: "acme/prepared-evidence",
+              name: "prepared-evidence",
+            },
+            // The model has file reads only; it never needs Git or the VCS service.
+            generate: (input) =>
+              Effect.gen(function* () {
+                assert.isDefined(input.preparedChange);
+                const { patchPath, filesPath } = input.preparedChange!;
+                const patch = yield* fs.readFileString(patchPath);
+                assert.deepStrictEqual(JSON.parse(yield* fs.readFileString(filesPath)), [
+                  "feature.txt",
+                ]);
+                assert.include(patch, "+++ b/feature.txt");
+                assert.include(patch, "@@ -0,0 +1,10 @@");
+                assert.include(patch, "+line 10");
+                assert.notInclude(patch, "lower.txt");
+                assert.notInclude(patch, "unrelated.txt");
+                assert.include(yield* fs.readFileString(`${input.cwd}/feature.txt`), "line 10");
+                yield* Deferred.succeed(seen, input);
+                yield* Deferred.await(finish);
+                return { stops: [] };
+              }).pipe(Effect.orDie),
+          }),
+        );
+        const service = Context.get(
+          context,
+          PullRequestReviewGuideService.PullRequestReviewGuideService,
+        );
+        yield* service.generate(evidenceReference);
+        const input = yield* Deferred.await(seen);
+        assert.isTrue(yield* fs.exists(input.preparedChange!.patchPath));
+        yield* Deferred.succeed(finish, undefined);
+        yield* Deferred.await(stored);
+        assert.isFalse(yield* fs.exists(input.preparedChange!.patchPath));
+        assert.isFalse(yield* fs.exists(input.preparedChange!.filesPath));
+        assert.isFalse(yield* fs.exists(input.cwd));
+        const result = yield* service.get(evidenceReference);
+        assert.deepStrictEqual(
+          result.guide?.stops.flatMap((stop) => stop.files.map((file) => file.path)),
+          ["feature.txt"],
+        );
+      }),
+    ),
+  );
+
   it.effect.each([
     {
       name: "a short head already fetched",

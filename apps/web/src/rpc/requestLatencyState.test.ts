@@ -36,6 +36,18 @@ describe("requestLatencyState", () => {
     ]);
   });
 
+  it("warns about VCS refreshes after 60 seconds while other requests retain 15 seconds", () => {
+    trackRpcRequestSent("vcs", WS_METHODS.vcsRefreshStatus);
+    trackRpcRequestSent("config", "server.getConfig");
+    vi.advanceTimersByTime(15_000);
+    expect(getSlowRpcAckRequests().map((request) => request.requestId)).toEqual(["config"]);
+    acknowledgeRpcRequest("config");
+    vi.advanceTimersByTime(44_999);
+    expect(getSlowRpcAckRequests()).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(getSlowRpcAckRequests()).toMatchObject([{ requestId: "vcs", thresholdMs: 60_000 }]);
+  });
+
   it("clears the slow request once the server acknowledges it", () => {
     trackRpcRequestSent("1", "git.status");
     vi.advanceTimersByTime(SLOW_RPC_ACK_THRESHOLD_MS);

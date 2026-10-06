@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
+import * as Schema from "effect/Schema";
 
 import {
   PullRequestOperationError,
@@ -40,6 +41,7 @@ import { reviewGuideInputFromPullRequest } from "./pullRequestReviewGuideInput.t
 import { normalizeReviewGuide, parseReviewGuideChange } from "./pullRequestReviewGuideNormalize.ts";
 
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,64}$/;
+const encodeChangedPaths = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 export class PullRequestReviewGuideService extends Context.Service<
   PullRequestReviewGuideService,
@@ -320,7 +322,22 @@ const make = Effect.gen(function* () {
       [diff(["--name-only", "-z"]), diff(["--unified=0", "--no-color", "--no-ext-diff"])],
       { concurrency: "unbounded" },
     );
-    return parseReviewGuideChange(nameOnly, patch);
+    const change = parseReviewGuideChange(nameOnly, patch);
+    // Repository commands can require IPC/network access unavailable to a read-only model.
+    // Keep the exact evidence used for normalization in scoped files outside the checkout.
+    const directory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "t3-review-guide-change-",
+    });
+    const preparedChange = {
+      patchPath: `${directory}/change.patch`,
+      filesPath: `${directory}/files.json`,
+    };
+    const filesJson = yield* encodeChangedPaths(change.files);
+    yield* Effect.all([
+      fileSystem.writeFileString(preparedChange.patchPath, patch),
+      fileSystem.writeFileString(preparedChange.filesPath, filesJson),
+    ]);
+    return { change, preparedChange };
   });
 
   const write = Effect.fn("PullRequestReviewGuideService.write")(function* (
@@ -355,19 +372,18 @@ const make = Effect.gen(function* () {
       runId,
     ).pipe(
       Effect.flatMap((checkout) =>
-        Effect.all(
-          {
-            generated: textGeneration.generateReviewGuide({
-              ...reviewGuideInputFromPullRequest(detail, activity, checkout.baseCommit),
-              cwd: checkout.path,
-              modelSelection,
-              instructions: projectSettings.reviewGuideInstructions,
-              stack: checkout.stack,
-            }),
-            change: readChange(checkout.path, checkout.baseCommit),
-          },
-          { concurrency: "unbounded" },
-        ),
+        Effect.gen(function* () {
+          const { change, preparedChange } = yield* readChange(checkout.path, checkout.baseCommit);
+          const generated = yield* textGeneration.generateReviewGuide({
+            ...reviewGuideInputFromPullRequest(detail, activity, checkout.baseCommit),
+            cwd: checkout.path,
+            modelSelection,
+            instructions: projectSettings.reviewGuideInstructions,
+            stack: checkout.stack,
+            preparedChange,
+          });
+          return { generated, change };
+        }),
       ),
       Effect.scoped,
     );

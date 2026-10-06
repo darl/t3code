@@ -192,6 +192,27 @@ describe("buildReviewGuidePrompt", () => {
     settledReview: "",
   };
 
+  it("uses prepared evidence without asking the sandbox to retrieve Git data", () => {
+    const { prompt } = buildReviewGuidePrompt({
+      ...input,
+      preparedChange: {
+        patchPath: "/tmp/review evidence/change.patch",
+        filesPath: "/tmp/review evidence/files.json",
+      },
+      stack: [
+        { number: 41, title: "Index", headSha: "aaa111", state: "merged" },
+        { number: 42, title: "Search", headSha: "bbb222", state: "open" },
+      ],
+    });
+    expect(prompt).toContain('"/tmp/review evidence/change.patch"');
+    expect(prompt).toContain('"/tmp/review evidence/files.json"');
+    expect(prompt).toContain("old/new hunk headers for excerpt coordinates");
+    expect(prompt).toContain("every changed file");
+    expect(prompt).not.toContain("git diff");
+    expect(prompt).not.toContain("git log");
+    expect(prompt).not.toContain("git show");
+  });
+
   it("adds the maintainer's preferences after the change context", () => {
     const { prompt } = buildReviewGuidePrompt({
       ...input,

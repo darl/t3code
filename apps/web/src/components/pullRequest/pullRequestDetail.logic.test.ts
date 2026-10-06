@@ -89,6 +89,7 @@ describe("pull request checkout commands", () => {
   it.each([
     ["github", "feature", null, "gh pr checkout 42"],
     ["gitlab", "feature", null, "glab mr checkout 42"],
+    ["arcanum", "feature", null, "arc pr checkout 42"],
     ["forgejo", "feature", null, null],
     ["azure-devops", "feature", null, "az repos pr checkout --id 42"],
     [
@@ -147,6 +148,9 @@ describe("pull request checkout commands", () => {
   });
 
   it("uses a public host when no repository identity is available", () => {
+    expect(loadingPullRequestCheckoutCommand(reference("arcadia"), undefined)).toBe(
+      "arc pr checkout 42",
+    );
     expect(loadingPullRequestCheckoutCommand(reference("github.com"), undefined)).toBe(
       "gh pr checkout 42",
     );

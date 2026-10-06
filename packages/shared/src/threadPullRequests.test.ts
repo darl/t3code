@@ -98,6 +98,15 @@ describe("threadPullRequestKeysEqual", () => {
       ),
     ).toBe(false);
   });
+
+  it("treats a link stored under the Arcanum review hostname as the arcadia checkout's key", () => {
+    expect(
+      threadPullRequestKeysEqual(
+        { host: "a.yandex-team.ru", repository: "arcadia", number: 15772960 },
+        { host: "arcadia", repository: "arcadia", number: 15772960 },
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("resolveThreadCurrentPullRequest", () => {

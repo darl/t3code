@@ -85,11 +85,17 @@ const resolveTarget = Effect.fn("PullRequestsToolkit.resolveTarget")(function* (
     return yield* new PullRequestTargetIncompleteError({});
   }
   const projectHost = projectHostAndProvider(project);
-  const host = (input.host ?? projectHost.host)?.toLowerCase();
-  if (host === undefined) {
+  const givenHost = (input.host ?? projectHost.host)?.toLowerCase();
+  if (givenHost === undefined) {
     return yield* new PullRequestHostRequiredError({});
   }
-  const repository = input.repository.toLowerCase();
+  // Canonical first, so a host spelled another way (Arcanum's review UI hostname for the
+  // arcadia checkout) still counts as the project's own and gets its URL shape.
+  const { host, repository } = normalizeThreadPullRequestKey({
+    host: givenHost,
+    repository: input.repository,
+    number: input.number,
+  });
   const url =
     changeRequestUrlFor(
       host === projectHost.host ? projectHost.kind : null,
@@ -98,10 +104,7 @@ const resolveTarget = Effect.fn("PullRequestsToolkit.resolveTarget")(function* (
       input.number,
       project?.repositoryIdentity?.locator.remoteUrl,
     ) ?? `https://${host}/${repository}/pull/${input.number}`;
-  return {
-    ...normalizeThreadPullRequestKey({ host, repository, number: input.number, url }),
-    url,
-  } satisfies ResolvedTarget;
+  return { host, repository, number: input.number, url } satisfies ResolvedTarget;
 });
 
 function entryOf(

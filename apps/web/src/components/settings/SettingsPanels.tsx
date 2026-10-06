@@ -613,6 +613,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.composerCollapseOnScroll !== DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll
         ? ["Collapse composer on scroll"]
         : []),
+      ...(settings.terminalCopyOnSelect !== DEFAULT_UNIFIED_SETTINGS.terminalCopyOnSelect
+        ? ["Copy terminal selection automatically"]
+        : []),
       ...(settings.composerRichTextEnabled !== DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled
         ? ["Rich text composer"]
         : []),
@@ -682,6 +685,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.confirmThreadUnpin,
       settings.composerCollapseOnScroll,
+      settings.terminalCopyOnSelect,
       settings.composerRichTextEnabled,
       settings.sendShortcut,
       settings.followUpBehavior,
@@ -799,6 +803,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
+      terminalCopyOnSelect: DEFAULT_UNIFIED_SETTINGS.terminalCopyOnSelect,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
@@ -2757,6 +2762,31 @@ export function GeneralSettingsPanel() {
                 updateSettings({ composerCollapseOnScroll: Boolean(checked) })
               }
               aria-label="Collapse composer on scroll"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("terminal-copy-on-select")}
+          description="Copy text to the clipboard as soon as you select it in the terminal, instead of showing the Copy / Add to chat popup. Add to chat stays in the right-click menu."
+          resetAction={
+            settings.terminalCopyOnSelect !== DEFAULT_UNIFIED_SETTINGS.terminalCopyOnSelect ? (
+              <SettingResetButton
+                label="copy terminal selection automatically"
+                onClick={() =>
+                  updateSettings({
+                    terminalCopyOnSelect: DEFAULT_UNIFIED_SETTINGS.terminalCopyOnSelect,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.terminalCopyOnSelect}
+              onCheckedChange={(checked) =>
+                updateSettings({ terminalCopyOnSelect: Boolean(checked) })
+              }
+              aria-label="Copy terminal selection automatically"
             />
           }
         />

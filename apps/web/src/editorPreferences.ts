@@ -1,5 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
+  buildRemoteOpenUrl,
   EDITORS,
   EditorId,
   EnvironmentAuthorizationError,
@@ -18,6 +19,12 @@ import { useCallback, useMemo } from "react";
 import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
 import { readEnvironmentScope } from "./state/session";
+import {
+  openRemoteEditorUrl,
+  useRemoteCapableEditors,
+  useRemoteOpenHint,
+  useRemoteOpenResolution,
+} from "./remoteOpen";
 
 const LAST_EDITOR_KEY = "t3code:last-editor";
 
@@ -45,6 +52,15 @@ export class PreferredEditorUnavailableError extends Schema.TaggedError<Preferre
   }
 }
 
+export class PreferredEditorRemoteOpenError extends Schema.TaggedError<PreferredEditorRemoteOpenError>()(
+  "PreferredEditorRemoteOpenError",
+  {
+    environmentId: EnvironmentId,
+    targetPath: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
 export function usePreferredEditor(availableEditors: ReadonlyArray<EditorId>) {
   const [lastEditor, setLastEditor] = useLocalStorage(LAST_EDITOR_KEY, null, EditorId);
 
@@ -69,6 +85,11 @@ export function useOpenInPreferredEditor(
   environmentId: EnvironmentId | null,
   availableEditors: readonly EditorId[],
 ) {
+  const remote = useRemoteOpenResolution(environmentId);
+  const remoteCapableEditors = useRemoteCapableEditors();
+  const [, markRemoteHintSeen] = useRemoteOpenHint();
+  const effectiveEditors =
+    remote.state.mode === "local-exec" ? availableEditors : remoteCapableEditors;
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, {
     reportFailure: false,
   });
@@ -84,6 +105,7 @@ export function useOpenInPreferredEditor(
         | PreferredEditorEnvironmentRequiredError
         | PreferredEditorUnavailableError
         | EnvironmentAuthorizationError
+        | PreferredEditorRemoteOpenError
       >
     > => {
       if (environmentId === null) {
@@ -105,17 +127,50 @@ export function useOpenInPreferredEditor(
           ),
         );
       }
-      const editor = resolveAndPersistPreferredEditor(availableEditors);
+      if (!remote.isResolved || remote.state.mode === "remote-unavailable") {
+        return AsyncResult.failure(
+          Cause.fail(
+            new PreferredEditorRemoteOpenError({
+              environmentId,
+              targetPath,
+              message: remote.isResolved
+                ? "No SSH address is available for opening files in this environment."
+                : "The environment connection is not ready for opening files.",
+            }),
+          ),
+        );
+      }
+      const editor = resolveAndPersistPreferredEditor(effectiveEditors);
       if (!editor) {
         return AsyncResult.failure(
           Cause.fail(
             new PreferredEditorUnavailableError({
               environmentId,
               targetPath,
-              availableEditorIds: availableEditors,
+              availableEditorIds: effectiveEditors,
             }),
           ),
         );
+      }
+      if (remote.state.mode === "remote-links") {
+        const url = buildRemoteOpenUrl({
+          editor,
+          host: remote.state.host.host,
+          absolutePath: targetPath,
+        });
+        if (url === undefined || !(await openRemoteEditorUrl(url))) {
+          return AsyncResult.failure(
+            Cause.fail(
+              new PreferredEditorRemoteOpenError({
+                environmentId,
+                targetPath,
+                message: "Unable to open the remote file in your local editor.",
+              }),
+            ),
+          );
+        }
+        markRemoteHintSeen();
+        return AsyncResult.success(editor);
       }
       const result = await openInEditor({
         environmentId,
@@ -126,6 +181,6 @@ export function useOpenInPreferredEditor(
       });
       return mapAtomCommandResult(result, () => editor);
     },
-    [availableEditors, environmentId, openInEditor],
+    [effectiveEditors, environmentId, markRemoteHintSeen, openInEditor, remote],
   );
 }

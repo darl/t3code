@@ -532,7 +532,7 @@ describe("ssh tunnel scripts", () => {
         stale = true;
         const reconnect = yield* Effect.forkChild(manager.ensureEnvironment(target));
         yield* Deferred.await(probeStarted);
-        yield* TestClock.adjust("2 seconds");
+        yield* TestClock.adjust("5 seconds");
         yield* Fiber.join(reconnect);
         assert.equal(forwards, 2);
         assert.equal(kills, 1);

@@ -31,6 +31,7 @@ import * as GitCafeApi from "@t3tools/source-control-gitcafe/server/GitCafeApi";
 import * as GitCafeCredentials from "@t3tools/source-control-gitcafe/server/GitCafeCredentials";
 import * as ForgejoSourceControlProvider from "@t3tools/source-control-forgejo/server/ForgejoSourceControlProvider";
 import * as ForgejoPullRequestProvider from "@t3tools/source-control-forgejo/server/ForgejoPullRequestProvider";
+import * as ArcanumCli from "./ArcanumCli.ts";
 import * as SourceControlDiscovery from "./SourceControlDiscovery.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 import * as ServerSourceControlHost from "./ServerSourceControlHost.ts";
@@ -46,6 +47,7 @@ const layerSourceControlProviderRegistryTest = (input: {
         ServerConfig.layerTest(process.cwd(), {
           prefix: "t3-source-control-registry-test-",
         }).pipe(Layer.provide(NodeServices.layer)),
+        Layer.mock(ArcanumCli.ArcanumCli)({}),
         Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
         Layer.mock(AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli)({}),
         Layer.mock(BitbucketApi.BitbucketApi)(input.bitbucket),
@@ -223,6 +225,12 @@ it.effect("reports implemented tools separately from locally available executabl
           auth: "unknown",
           account: Option.none(),
         },
+        {
+          kind: SourceControlProviderKind.make("arcanum"),
+          status: "missing",
+          auth: "unknown",
+          account: Option.none(),
+        },
       ],
     );
     const bitbucket = result.sourceControlProviders.find((item) => item.kind === "bitbucket");
@@ -292,6 +300,9 @@ Logged in to gitlab.com as gitlab-user
             encodeJson({ schemaVersion: 1, data: { host: "git.cafe", username: "cafe-user" } }),
           ),
         );
+      }
+      if (input.command === "arc" && input.args.join(" ") === "token show") {
+        return Effect.succeed(processOutput("token-value-never-shown\n"));
       }
       return Effect.fail(
         new VcsProcessSpawnError({
@@ -372,6 +383,12 @@ Logged in to gitlab.com as gitlab-user
           kind: SourceControlProviderKind.make("gitcafe"),
           auth: "authenticated",
           account: Option.some("cafe-user"),
+          detail: Option.none(),
+        },
+        {
+          kind: SourceControlProviderKind.make("arcanum"),
+          auth: "authenticated",
+          account: Option.none(),
           detail: Option.none(),
         },
       ],

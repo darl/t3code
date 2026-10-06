@@ -9,6 +9,7 @@ export interface ChangeRequestPresentation {
     | "azure-devops"
     | "bitbucket"
     | "gitcafe"
+    | "arcanum"
     | "change-request";
   readonly providerName: string;
   readonly shortName: string;
@@ -89,6 +90,17 @@ const GITCAFE_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   urlExample: "https://git.cafe/owner/repo/pulls/42",
 };
 
+const ARCANUM_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "arcanum",
+  providerName: "Arcanum",
+  shortName: "PR",
+  longName: "pull request",
+  pluralLongName: "pull requests",
+  providerLongName: "Arcanum pull request",
+  checkoutCommandExample: "arc pr checkout 123",
+  urlExample: "https://a.yandex-team.ru/review/42",
+};
+
 const GENERIC_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "change-request",
   providerName: "source control",
@@ -116,6 +128,8 @@ export function resolveChangeRequestPresentation(
       return BITBUCKET_CHANGE_REQUEST_PRESENTATION;
     case "gitcafe":
       return GITCAFE_CHANGE_REQUEST_PRESENTATION;
+    case "arcanum":
+      return ARCANUM_CHANGE_REQUEST_PRESENTATION;
     default:
       return GENERIC_CHANGE_REQUEST_PRESENTATION;
   }
@@ -207,6 +221,12 @@ function isBitbucketHost(host: string): boolean {
   return host === "bitbucket.org" || hasDnsLabel(host, "bitbucket");
 }
 
+// Arcadia working copies surface their remote as arc://arcadia/arcadia
+// (URL host "arcadia"); the Arcanum review UI lives at a.yandex-team.ru.
+function isArcanumHost(host: string): boolean {
+  return host === "arcadia" || host === "a.yandex-team.ru" || host.includes("arcanum");
+}
+
 export function detectSourceControlProviderFromRemoteUrl(
   remoteUrl: string,
 ): SourceControlProviderInfo | null {
@@ -270,6 +290,14 @@ export function detectSourceControlProviderFromRemoteUrl(
     };
   }
 
+  if (isArcanumHost(hostname)) {
+    return {
+      kind: SourceControlProviderKind.make("arcanum"),
+      name: "Arcanum",
+      baseUrl: "https://a.yandex-team.ru",
+    };
+  }
+
   return {
     kind: SourceControlProviderKind.make("unknown"),
     name: host,
@@ -299,13 +327,17 @@ export function sourceControlRepositorySelector(
 }
 
 export function canonicalRepositoryKey(key: string): string {
-  return key
-    .replace(
-      /^(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/u,
-      "dev.azure.com/$1/$2/_git/$3",
-    )
-    .replace(
-      /^([^.]+)\.visualstudio\.com\/(?:defaultcollection\/)?([^/]+)\/_git\/([^/]+)$/u,
-      "dev.azure.com/$1/$2/_git/$3",
-    );
+  return (
+    key
+      // Links stored with the Arcanum review UI's hostname mean the arcadia checkout's key.
+      .replace(/^a\.yandex-team\.ru\/arcadia$/u, "arcadia/arcadia")
+      .replace(
+        /^(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/u,
+        "dev.azure.com/$1/$2/_git/$3",
+      )
+      .replace(
+        /^([^.]+)\.visualstudio\.com\/(?:defaultcollection\/)?([^/]+)\/_git\/([^/]+)$/u,
+        "dev.azure.com/$1/$2/_git/$3",
+      )
+  );
 }
