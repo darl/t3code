@@ -2017,6 +2017,9 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       "https://gitlab.example/group/pull/123/repository/-/merge_requests/42",
       "gitlab.example/group/pull/123/repository",
     ],
+    ["https://a.yandex-team.ru/review/15598276", "arcadia/arcadia"],
+    ["https://a.yandex-team.ru/review/15598276/files", "arcadia/arcadia"],
+    ["https://a.yandex-team.ru/arcadia/sdg/simulator", null],
     ["https://github.example.com/team/repository/issues/42", null],
   ] as const)("reads the repository from the returned PR URL %s", (url, expected) => {
     expect(GitManager.pullRequestRepositoryKey(url)).toBe(expected);
@@ -3887,6 +3890,212 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           call.includes("pr create --base master --head feature/master-default"),
         ),
       ).toBe(true);
+    }),
+  );
+
+  it.effect("create_pr ignores an arc publish-alias upstream and falls to the default base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "t3code/foo"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "alias.txt"), "alias\n");
+      yield* runGit(repoDir, ["add", "alias.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Alias commit"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "arcadia", remoteDir]);
+      // arc publishes local branch X as users/<login>/X, so on an arc checkout every branch
+      // tracks an upstream spelled exactly like this — an alias of itself, never a base.
+      yield* runGit(repoDir, ["push", "arcadia", "t3code/foo:users/alice/t3code/foo"]);
+      yield* runGit(repoDir, ["fetch", "arcadia"]);
+      yield* runGit(repoDir, ["branch", "--set-upstream-to", "arcadia/users/alice/t3code/foo"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            "[]",
+            "[]",
+            JSON.stringify([
+              {
+                number: 501,
+                title: "Alias branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/501",
+                baseRefName: "main",
+                headRefName: "users/alice/t3code/foo",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      // The alias must never become the merge base — that would open the PR onto its own
+      // branch. The base falls through to the provider default instead ("main" in this
+      // harness; ArcanumCli answers trunk on a real arc checkout). The head keeps the
+      // published name, which is what the alias is for.
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base main --head users/alice/t3code/foo"),
+        ),
+      ).toBe(true);
+      expect(ghCalls.some((call) => call.includes("--base users/alice/t3code/foo"))).toBe(false);
+    }),
+  );
+
+  it.effect("create_pr sees through a doubled publish alias on a users/-named branch", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "users/alice/foo"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "doubled.txt"), "doubled\n");
+      yield* runGit(repoDir, ["add", "doubled.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Doubled alias commit"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "arcadia", remoteDir]);
+      // A local branch literally named users/alice/foo publishes to
+      // users/alice/users/alice/foo, so the alias doubles the prefix.
+      yield* runGit(repoDir, ["push", "arcadia", "users/alice/foo:users/alice/users/alice/foo"]);
+      yield* runGit(repoDir, ["fetch", "arcadia"]);
+      yield* runGit(repoDir, [
+        "branch",
+        "--set-upstream-to",
+        "arcadia/users/alice/users/alice/foo",
+      ]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            "[]",
+            "[]",
+            JSON.stringify([
+              {
+                number: 502,
+                title: "Doubled alias branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/502",
+                baseRefName: "main",
+                headRefName: "users/alice/users/alice/foo",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base main --head users/alice/users/alice/foo"),
+        ),
+      ).toBe(true);
+      expect(ghCalls.some((call) => call.includes("--base users/alice/users/alice/foo"))).toBe(
+        false,
+      );
+    }),
+  );
+
+  it.effect("an alias upstream composes with the remote default when the provider is silent", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "arcadia", remoteDir]);
+      // The remote records trunk as its default branch, the way an arc-backed remote does.
+      yield* runGit(repoDir, ["push", "arcadia", "main:trunk"]);
+      yield* runGit(repoDir, ["fetch", "arcadia"]);
+      yield* runGit(repoDir, ["remote", "set-head", "arcadia", "trunk"]);
+      yield* runGit(repoDir, ["checkout", "-b", "t3code/bar"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "compose.txt"), "compose\n");
+      yield* runGit(repoDir, ["add", "compose.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Compose commit"]);
+      yield* runGit(repoDir, ["push", "arcadia", "t3code/bar:users/alice/t3code/bar"]);
+      yield* runGit(repoDir, ["fetch", "arcadia"]);
+      yield* runGit(repoDir, ["branch", "--set-upstream-to", "arcadia/users/alice/t3code/bar"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          // A provider with no default branch to report, so the remote's own record decides.
+          defaultBranch: "",
+          prListSequence: [
+            "[]",
+            "[]",
+            JSON.stringify([
+              {
+                number: 504,
+                title: "Compose branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/504",
+                baseRefName: "trunk",
+                headRefName: "users/alice/t3code/bar",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      // The alias never becomes the base, and the fallback chain keeps its order: the
+      // provider default first, then the remote's recorded default — never a bare "main".
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base trunk --head users/alice/t3code/bar"),
+        ),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect("create_pr still uses a genuinely different upstream as the stacked base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "develop"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "develop"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature-x"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "stacked.txt"), "stacked\n");
+      yield* runGit(repoDir, ["add", "stacked.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Stacked commit"]);
+      yield* runGit(repoDir, ["push", "origin", "feature-x"]);
+      yield* runGit(repoDir, ["branch", "--set-upstream-to", "origin/develop"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            "[]",
+            JSON.stringify([
+              {
+                number: 503,
+                title: "Stacked branch",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/503",
+                baseRefName: "develop",
+                headRefName: "develop",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      // The publish-alias guard is narrow: an upstream that is not users/<login>/<the local
+      // name> keeps working as the stacked-branch base it always was.
+      expect(ghCalls.some((call) => call.includes("pr create --base develop "))).toBe(true);
     }),
   );
 
@@ -6401,6 +6610,70 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           label: "Creating pull request...",
         }),
       ]);
+    }),
+  );
+
+  it.effect("resolveWorktreeThreadPath lands in the project subdirectory of the worktree", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* makeDirectory(NodePath.join(repoDir, "packages", "app"));
+      yield* fileSystem.writeFileString(
+        NodePath.join(repoDir, "packages", "app", "index.ts"),
+        "export {};\n",
+      );
+      yield* runGit(repoDir, ["add", "."]);
+      yield* runGit(repoDir, ["commit", "-m", "Add packages/app"]);
+      const worktreePath = NodePath.join(
+        yield* makeTempDir("t3code-git-manager-worktrees-"),
+        "feature-worktree",
+      );
+      yield* runGit(repoDir, ["worktree", "add", "-b", "feature/landing", worktreePath]);
+
+      const { manager } = yield* makeManager();
+
+      const threadPath = yield* manager.resolveWorktreeThreadPath({
+        cwd: NodePath.join(repoDir, "packages", "app"),
+        worktreePath,
+      });
+      expect(threadPath).toBe(NodePath.join(worktreePath, "packages", "app"));
+    }),
+  );
+
+  it.effect("resolveWorktreeThreadPath falls back to the worktree root", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      // Present in the main working tree only: never committed, so the
+      // subdirectory does not exist inside the worktree.
+      yield* makeDirectory(NodePath.join(repoDir, "local-only"));
+      const worktreePath = NodePath.join(
+        yield* makeTempDir("t3code-git-manager-worktrees-"),
+        "feature-worktree",
+      );
+      yield* runGit(repoDir, ["worktree", "add", "-b", "feature/fallback", worktreePath]);
+      const nonRepoDir = yield* makeTempDir("t3code-git-manager-non-repo-");
+
+      const { manager } = yield* makeManager();
+
+      const fromRepoRoot = yield* manager.resolveWorktreeThreadPath({
+        cwd: repoDir,
+        worktreePath,
+      });
+      expect(fromRepoRoot).toBe(worktreePath);
+
+      const fromMissingSubdirectory = yield* manager.resolveWorktreeThreadPath({
+        cwd: NodePath.join(repoDir, "local-only"),
+        worktreePath,
+      });
+      expect(fromMissingSubdirectory).toBe(worktreePath);
+
+      const fromNonRepository = yield* manager.resolveWorktreeThreadPath({
+        cwd: nonRepoDir,
+        worktreePath,
+      });
+      expect(fromNonRepository).toBe(worktreePath);
     }),
   );
 });

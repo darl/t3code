@@ -2120,6 +2120,47 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("corrects a linked pull request URL and retains it through rebuilds", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const threadId = ThreadId.make("runtime-pr-url-correction");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-url-create"),
+        threadId,
+        projectId: ProjectId.make("pr-url-project"),
+        title: "Review",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "arcadia", repository: "arcadia", number: 15750946 };
+      for (const [index, url] of [
+        "https://arcadia/arcadia/pull/15750946",
+        "https://a.yandex-team.ru/review/15750946",
+      ].entries()) {
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.link",
+          commandId: CommandId.make(`pr-url-link-${index}`),
+          threadId,
+          ...key,
+          url,
+          source: "agent",
+        });
+      }
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.url,
+        "https://a.yandex-team.ru/review/15750946",
+      );
+    }),
+  );
+
   it.effect("retains multiple pull requests and dismissed stack members through rebuilds", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

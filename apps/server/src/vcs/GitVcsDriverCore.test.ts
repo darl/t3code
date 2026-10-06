@@ -1091,8 +1091,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           })
           .pipe(Effect.flip);
 
-        assert.equal(error.detail, "git worktree add failed");
-        assert.include(error.message, "git worktree add failed (branch_checked_out_in_worktree)");
+        assert.match(error.detail, /^git worktree add failed:/);
+        assert.include(error.message, "(branch_checked_out_in_worktree)");
       }),
     );
 
@@ -3004,6 +3004,29 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("reports git's reason when worktree add fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "bad-base");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: "no-such-base-ref",
+            newRefName: "feature/bad-base",
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.match(error.detail, /^git worktree add failed: fatal: /);
+        assert.match(error.detail, /no-such-base-ref/);
+      }),
+    );
+
     it.effect("creates worktrees under the configured worktrees directory", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -3338,6 +3361,38 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
         const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
         assert.notInclude(registered, "stale");
+      }),
+    );
+
+    it.effect("removes a worktree when given a path inside the worktree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "packages/app/index.ts", "export {};\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add subdirectory"]);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-"),
+          "subdir-worktree",
+        );
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/subdir-worktree",
+        });
+
+        // Thread worktree paths may point at the project subdirectory rather
+        // than the worktree root; removal must still remove the worktree.
+        yield* driver.removeWorktree({
+          cwd,
+          path: pathService.join(worktreePath, "packages", "app"),
+        });
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
       }),
     );
   });

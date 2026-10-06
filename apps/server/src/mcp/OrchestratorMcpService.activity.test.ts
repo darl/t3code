@@ -19,6 +19,7 @@ import { expect, it } from "vite-plus/test";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -157,6 +158,8 @@ it("readThread prefers activity-run status over a newer cancelled queued run", a
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeCrypto.layer,
       ),
     ),
@@ -222,6 +225,8 @@ it("readThread prefers waiting activity status over a newer cancelled queued run
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeCrypto.layer,
       ),
     ),
@@ -335,6 +340,8 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeCrypto.layer,
       ),
     ),
@@ -468,6 +475,8 @@ it("readThread and sendToThread reach threads in other projects", async () => {
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeCrypto.layer,
       ),
     ),

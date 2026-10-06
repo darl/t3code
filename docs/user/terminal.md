@@ -16,3 +16,7 @@ To copy all retained output, choose Select all in the terminal's context menu,
 then copy. Cmd+A on macOS and Ctrl+Shift+A elsewhere select the same output.
 Ctrl+A still moves to the beginning of shell input on Windows and Linux.
 Jump to latest in the context menu returns to the current output.
+
+To open a file path from terminal output in your preferred editor, hold Command
+on macOS or Ctrl on Windows and Linux while clicking it. Ordinary clicks and
+drags select terminal text. Web links open with an ordinary click.

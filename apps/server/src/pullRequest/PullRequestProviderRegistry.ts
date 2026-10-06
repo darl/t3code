@@ -3,6 +3,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { SourceControlProviderKind } from "@t3tools/contracts";
 
+import * as ArcanumCli from "../sourceControl/ArcanumCli.ts";
+import * as ArcanumPullRequestApi from "./ArcanumPullRequestApi.ts";
+import * as ArcanumPullRequestProvider from "./ArcanumPullRequestProvider.ts";
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import type { PullRequestProviderApi } from "@t3tools/source-control-core/server/PullRequestProvider";
 
@@ -36,11 +39,13 @@ export const make = Effect.gen(function* () {
   const drivers = yield* Effect.forEach(BuiltInDrivers.BUILT_IN_SOURCE_CONTROL_DRIVERS, (driver) =>
     driver.make.pipe(Effect.map((instance) => instance.pullRequests)),
   );
-  return fromProviders(
-    drivers.filter((provider): provider is PullRequestProviderApi => provider !== null),
-  );
+  return fromProviders([
+    ...drivers.filter((provider): provider is PullRequestProviderApi => provider !== null),
+    yield* ArcanumPullRequestProvider.make,
+  ]);
 });
 
 export const layer = Layer.effect(PullRequestProviderRegistry, make).pipe(
   Layer.provide(BuiltInDrivers.layer),
+  Layer.provide(ArcanumPullRequestApi.layer.pipe(Layer.provide(ArcanumCli.layer))),
 );

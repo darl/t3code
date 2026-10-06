@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import * as ArcanumCli from "../src/sourceControl/ArcanumCli.ts";
 // This CLI uses Node argument parsing and random ordering at the application boundary.
 // @effect-diagnostics nodeBuiltinImport:off
 // Run with --model <configured-model> --out /tmp/title-eval.
@@ -147,6 +148,7 @@ await Effect.runPromise(
         ProcessRunner.layer,
         SourceControlProviderRegistry.layer.pipe(
           Layer.provide(SourceControlBuiltInDrivers.layer),
+          Layer.provide(ArcanumCli.layer),
           // Default settings: no saved Bitbucket token, gh's own GitHub account choice.
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer))),

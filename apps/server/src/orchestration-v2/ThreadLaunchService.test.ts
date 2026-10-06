@@ -98,6 +98,7 @@ const adapter = {
 
 interface HarnessOptions {
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
+  readonly resolveWorktreeThreadPath?: GitWorkflow.GitWorkflowService["Service"]["resolveWorktreeThreadPath"];
   readonly createWorktree?: GitWorkflow.GitWorkflowService["Service"]["createWorktree"];
   readonly fetchRemote?: GitWorkflow.GitWorkflowService["Service"]["fetchRemote"];
   readonly hasCommit?: GitWorkflow.GitWorkflowService["Service"]["hasCommit"];
@@ -167,6 +168,8 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     Layer.mock(GitWorkflow.GitWorkflowService)({
       createWorktree,
+      resolveWorktreeThreadPath:
+        options.resolveWorktreeThreadPath ?? ((input) => Effect.succeed(input.worktreePath)),
       renameBranch,
       fetchRemote: options.fetchRemote ?? (() => Effect.void),
       hasCommit: options.hasCommit ?? (() => Effect.succeed(false)),
@@ -2265,6 +2268,33 @@ it.effect.each([0, 1])("releases an async setup before its completion with exit 
       assert.equal(
         (yield* threads.getThreadProjection(launched.threadId)).runs[0]?.status,
         "starting",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("launches worktree threads in the resolved project subdirectory", () =>
+  Effect.gen(function* () {
+    const setupStarted = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      runSetup: () =>
+        Deferred.succeed(setupStarted, undefined).pipe(Effect.as({ status: "no-script" as const })),
+      resolveWorktreeThreadPath: (input) => Effect.succeed(`${input.worktreePath}/apps/server`),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:subdirectory",
+          thread: "thread:launch:subdirectory",
+          workspace: { type: "worktree", baseRef: "main", branch: "feature" },
+        }),
+      );
+      yield* Deferred.await(setupStarted);
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      assert.equal(
+        (yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath,
+        "/repo-worktrees/feature/apps/server",
       );
     }).pipe(Effect.provide(harness.layer));
   }),

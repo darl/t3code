@@ -439,6 +439,8 @@ export function TerminalViewport({
     }),
   );
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
+  const copyOnSelect = useClientSettings((settings) => settings.terminalCopyOnSelect);
+  const shouldCopyOnSelect = useEffectEvent(() => copyOnSelect);
   const terminalSession = useAttachedTerminalSession({
     environmentId,
     terminal: {
@@ -768,6 +770,18 @@ export function TerminalViewport({
       };
 
       const showSelectionAction = async (pointer: SelectionActionPoint | null) => {
+        // Copy on select needs no native menu, so it also works in a browser
+        // client, where the popup below is never shown.
+        if (shouldCopyOnSelect()) {
+          const nextAction = readSelectionAction(pointer);
+          if (!nextAction) {
+            clearSelectionAction();
+            return;
+          }
+          const requestId = ++selectionActionRequestIdRef.current;
+          await copySelection(nextAction.clipboardText, requestId);
+          return;
+        }
         if (!localApi) {
           clearSelectionAction();
           return;
@@ -903,9 +917,12 @@ export function TerminalViewport({
             return;
           }
           const error = squashAtomCommandFailure(result);
-          writeSystemMessage(
-            latestTerminal,
-            error instanceof Error ? error.message : "Unable to open path",
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Unable to open file",
+              description: error instanceof Error ? error.message : "Unable to open path",
+            }),
           );
         })();
       }
