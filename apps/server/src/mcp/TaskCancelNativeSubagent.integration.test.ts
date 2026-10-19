@@ -216,6 +216,7 @@ const cancelBackgroundOnlyTask = (
             layerAdapters,
             Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
             Layer.mock(ProjectService.ProjectService)({}),
+            Layer.mock(GitVcsDriver.GitVcsDriver)({}),
             Layer.mock(SecretRequests.SecretRequests)({}),
             Layer.mock(RemoteDelegation.RemoteDelegation)({}),
             ServerSettings.layerTest(),

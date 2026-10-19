@@ -123,6 +123,7 @@ interface HarnessOptions {
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
   readonly adapters?: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]>;
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
+  readonly resolveWorktreeThreadPath?: GitWorkflow.GitWorkflowService["Service"]["resolveWorktreeThreadPath"];
   readonly createWorktree?: GitWorkflow.GitWorkflowService["Service"]["createWorktree"];
   readonly fetchWorktreeBaseCommit?: GitWorkflow.GitWorkflowService["Service"]["fetchWorktreeBaseCommit"];
   readonly remoteExists?: GitWorkflow.GitWorkflowService["Service"]["remoteExists"];
@@ -208,6 +209,8 @@ function makeHarness(options: HarnessOptions = {}) {
     Layer.mock(GitWorkflow.GitWorkflowService)({
       repositoryRoot: () => Effect.succeed(project.workspaceRoot),
       createWorktree,
+      resolveWorktreeThreadPath:
+        options.resolveWorktreeThreadPath ?? ((input) => Effect.succeed(input.worktreePath)),
       renameBranch,
       fetchWorktreeBaseCommit:
         options.fetchWorktreeBaseCommit ??
@@ -216,6 +219,15 @@ function makeHarness(options: HarnessOptions = {}) {
       currentBranch: () => Effect.succeed(null),
       resolveWorktreeBaseRemote: () => Effect.succeed({ remoteName: "origin", branchName: "main" }),
       remoteExists: options.remoteExists ?? (() => Effect.succeed(true)),
+      hasRefNamed: () => Effect.succeed(false),
+      listRefs: () =>
+        Effect.succeed({
+          refs: [],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 0,
+        }),
       remoteBranchExists: () => Effect.succeed(true),
       listLocalBranchNames: () => Effect.succeed([]),
       removeWorktree,
@@ -2369,6 +2381,7 @@ it.effect("cancels tracked setup before provider work is released", () =>
     const entered = yield* Deferred.make<void>();
     const renamed = yield* Deferred.make<void>();
     const harness = makeHarness({
+      resolveWorktreeThreadPath: (input) => Effect.succeed(`${input.worktreePath}/subproject`),
       renameBranch: (input) =>
         Deferred.succeed(renamed, undefined).pipe(Effect.as({ branch: input.newBranch })),
       runSetup: () =>
@@ -2396,6 +2409,7 @@ it.effect("cancels tracked setup before provider work is released", () =>
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.runs[0]?.status, "failed");
       assert.isNull(projection.thread.worktreePath);
+      assert.equal(harness.removeWorktree.mock.calls[0]?.[0].path, "/repo-worktrees/feature");
       assert.deepEqual(harness.deleteLocalBranch.mock.calls[0]?.[0], {
         cwd: "/repo",
         refName: "generated-branch",
@@ -2770,6 +2784,97 @@ it.effect("leaves uncertain Git detection failures to workspace preparation", ()
       ),
       Effect.provide(harness.layer),
     );
+  }),
+);
+
+it.effect.each([
+  { startFromOrigin: false, localBaseExists: false, expected: "trunk" },
+  { startFromOrigin: true, localBaseExists: false, expected: "remote-trunk-sha" },
+  { startFromOrigin: true, localBaseExists: true, expected: "missing-feature" },
+  {
+    startFromOrigin: true,
+    localBaseExists: false,
+    expected: "remote-trunk-sha",
+    remoteDefault: true,
+  },
+  { startFromOrigin: false, localBaseExists: false, expected: "trunk", noDefault: true },
+])("resolves the worktree base with $startFromOrigin and local base $localBaseExists", (testCase) =>
+  Effect.gen(function* () {
+    const created = yield* Deferred.make<string>();
+    const harness = makeHarness({
+      hasCommit: ({ refName }) =>
+        Effect.succeed(
+          refName === "HEAD" ||
+            refName === "trunk" ||
+            (testCase.localBaseExists && refName === "missing-feature"),
+        ),
+      git: {
+        fetchWorktreeBaseCommit: ({ refName }) =>
+          Effect.succeed(
+            refName === "trunk"
+              ? { commitSha: "remote-trunk-sha", remoteRefName: "origin/trunk" }
+              : null,
+          ),
+        listRefs: () =>
+          Effect.succeed({
+            refs: testCase.noDefault
+              ? []
+              : [
+                  {
+                    name: testCase.remoteDefault ? "origin/trunk" : "trunk",
+                    isRemote: testCase.remoteDefault === true,
+                    remoteName: "origin",
+                    current: true,
+                    isDefault: true,
+                    worktreePath: "/repo",
+                  },
+                ],
+            isRepo: true,
+            hasPrimaryRemote: true,
+            nextCursor: null,
+            totalCount: 1,
+          }),
+      },
+      createWorktree: (input) =>
+        Deferred.succeed(created, input.refName).pipe(
+          Effect.as({ worktree: { path: "/repo-worktrees/feature", refName: input.newRefName! } }),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const workspace = {
+        type: "worktree" as const,
+        baseRef: "missing-feature",
+        branch: "feature",
+        startFromOrigin: testCase.startFromOrigin,
+      };
+      yield* launches.checkWorktreeBase({ projectId, workspaceStrategy: workspace });
+      yield* launches.launch(
+        launchInput({
+          command: "command:launch:missing-base",
+          thread: "thread:launch:missing-base",
+          message: "Start",
+          workspace,
+        }),
+      );
+      assert.equal(yield* Deferred.await(created), testCase.expected);
+      assert.equal(
+        harness.createWorktree.mock.calls[0]?.[0].baseRefName,
+        testCase.localBaseExists
+          ? "missing-feature"
+          : testCase.startFromOrigin
+            ? "refs/remotes/origin/trunk"
+            : "trunk",
+      );
+      if (!testCase.localBaseExists) {
+        const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+        const setup = yield* tracker.get(ThreadId.make("thread:launch:missing-base"));
+        assert.equal(
+          setup?.stages.find((stage) => stage.id === "checkout")?.detail,
+          'Base ref "missing-feature" is unavailable; using "trunk".',
+        );
+      }
+    }).pipe(Effect.provide(harness.layer));
   }),
 );
 

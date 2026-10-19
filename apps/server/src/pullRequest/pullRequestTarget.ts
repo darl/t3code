@@ -93,11 +93,15 @@ export const resolveTarget = Effect.fn("PullRequestsToolkit.resolveTarget")(func
     return yield* new PullRequestTargetIncompleteError({});
   }
   const projectHost = projectHostAndProvider(project);
-  const host = (input.host ?? projectHost.host)?.toLowerCase();
-  if (host === undefined) {
+  const givenHost = (input.host ?? projectHost.host)?.toLowerCase();
+  if (givenHost === undefined) {
     return yield* new PullRequestHostRequiredError({});
   }
-  const repository = input.repository.toLowerCase();
+  const { host, repository } = normalizeThreadPullRequestKey({
+    host: givenHost,
+    repository: input.repository,
+    number: input.number,
+  });
   // Without a URL, a public forge host says what shape its change request URLs take;
   // any other host is taken to run the project's own forge.
   const recognizedKind = sourceControlDefinitions.recognizeRemote(`https://${host}`)?.kind;

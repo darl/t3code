@@ -232,6 +232,8 @@ it("readThread preserves caller access errors and prefers activity-run status ov
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeCrypto.layer,
       ),
     ),
@@ -732,6 +734,8 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeCrypto.layer,
       ),
     ),
@@ -873,6 +877,8 @@ it("readThread and sendToThread reach threads in other projects", async () => {
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeCrypto.layer,
       ),
     ),

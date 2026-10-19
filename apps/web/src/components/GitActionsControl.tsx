@@ -168,7 +168,7 @@ const inlineSuccessExpiresAt = () => Date.now() + GIT_ACTION_SUCCESS_VISIBLE_MS;
 
 type RefreshVcsStatus = (target: {
   readonly environmentId: ScopedThreadRef["environmentId"];
-  readonly input: { readonly cwd: string };
+  readonly input: { readonly cwd: string; readonly refreshPullRequest?: boolean };
 }) => Promise<unknown>;
 
 function requestVcsStatusRefresh(
@@ -179,7 +179,7 @@ function requestVcsStatusRefresh(
   if (environmentId === null || cwd === null) {
     return;
   }
-  void refresh({ environmentId, input: { cwd } });
+  void refresh({ environmentId, input: { cwd, refreshPullRequest: false } });
 }
 const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 

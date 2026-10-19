@@ -19,6 +19,7 @@ import { vi } from "vite-plus/test";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerOwnership from "../serverOwnership.ts";
+import { hasPendingForkMigrations, runForkMigrations } from "./ForkMigrations.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 import * as SqlitePersistence from "./Sqlite.ts";
 
@@ -195,9 +196,10 @@ const ownT3Home = Effect.fn(function* () {
 const migrateTo = (toMigrationInclusive?: number) =>
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig.ServerConfig;
-    yield* runMigrations({ toMigrationInclusive }).pipe(
-      Effect.provide(NodeSqliteClient.layer({ filename: dbPath })),
-    );
+    yield* Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive });
+      if (toMigrationInclusive === undefined) yield* runForkMigrations();
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
   });
 
 const latestRecordedMigrationId = Effect.gen(function* () {
@@ -214,23 +216,41 @@ const latestRecordedMigrationId = Effect.gen(function* () {
 const layerT3Home = ServerConfig.layerTest(process.cwd(), { prefix: "t3-sqlite-cli-" });
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("layerCliConfig", (it) => {
-  it.effect("does not migrate a T3 home a running server owns", () =>
-    Effect.gen(function* () {
-      const recorded = Math.max(...migrationManifest.map(([id]) => id)) - 1;
-      yield* migrateTo(recorded);
-      yield* ownT3Home();
+  it.effect.each(["upstream", "fork", "legacy"] as const)(
+    "does not migrate %s while a server owns the home",
+    (kind) =>
+      Effect.gen(function* () {
+        const recorded = Math.max(...migrationManifest.map(([id]) => id)) - 1;
+        yield* migrateTo(kind === "upstream" ? recorded : undefined);
+        const { dbPath } = yield* ServerConfig.ServerConfig;
+        const pending = Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          if (kind === "fork") yield* sql`DELETE FROM fork_sql_migrations`;
+          if (kind === "legacy")
+            yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (10000, 'CanonicalArcanumThreadPullRequests', CURRENT_TIMESTAMP)`;
+        });
+        yield* pending.pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+        const before = yield* latestRecordedMigrationId;
+        yield* ownT3Home();
 
-      const opened = yield* Effect.void.pipe(
-        Effect.provide(SqlitePersistence.layerCliConfig),
-        Effect.result,
-      );
+        const opened = yield* Effect.void.pipe(
+          Effect.provide(SqlitePersistence.layerCliConfig),
+          Effect.result,
+        );
 
-      assert.equal(yield* latestRecordedMigrationId, recorded);
-      assert.equal(opened._tag, "Failure");
-      if (opened._tag === "Failure") {
-        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
-      }
-    }).pipe(Effect.scoped, Effect.provide(layerT3Home)),
+        assert.equal(yield* latestRecordedMigrationId, before);
+        if (kind !== "upstream") {
+          assert.isTrue(
+            yield* hasPendingForkMigrations().pipe(
+              Effect.provide(NodeSqliteClient.layer({ filename: dbPath })),
+            ),
+          );
+        }
+        assert.equal(opened._tag, "Failure");
+        if (opened._tag === "Failure") {
+          assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+        }
+      }).pipe(Effect.scoped, Effect.provide(layerT3Home)),
   );
 
   it.effect("opens a current T3 home while a running server owns it", () =>

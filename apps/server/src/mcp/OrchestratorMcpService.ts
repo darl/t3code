@@ -2027,7 +2027,11 @@ const make = Effect.gen(function* () {
     for (const branch of conventional) {
       if (yield* refExists(cwd, `refs/heads/${branch}`)) return branch;
     }
-    return "main";
+    return yield* new OrchestratorMcpFailure({
+      code: "invalid_request",
+      message:
+        "Could not determine the repository's default branch for scheduled worktrees. Configure a remote default branch or create a local main/master branch.",
+    });
   });
 
   const scheduledTaskWorkspaceStrategy = Effect.fn(

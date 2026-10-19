@@ -1,7 +1,11 @@
 import { resolveEventKeys } from "@t3tools/shared/keybindingMatching";
 import { isMacPlatform } from "../../lib/utils";
 import { SELECTION_MULTI_CLICK_INTERVAL_MS } from "../../lib/selectionActions";
-import { collectWrappedTerminalLinkLine, extractTerminalLinks } from "../../terminal-links";
+import {
+  collectWrappedTerminalLinkLine,
+  extractTerminalLinks,
+  isTerminalUrl,
+} from "../../terminal-links";
 import {
   GHOSTTY_CELL_WIDE,
   GhosttyTerminalCore,
@@ -1382,7 +1386,12 @@ export class GhosttyTerminalSurface {
     if (event.button !== 0) return;
     const clickCount = this.recordSelectionClick(event);
     const link = this.linkAt(event.clientX, event.clientY, true);
-    if (link && !event.shiftKey && clickCount === 1) {
+    if (
+      link &&
+      !event.shiftKey &&
+      clickCount === 1 &&
+      (isTerminalUrl(link.text) || event.metaKey || event.ctrlKey)
+    ) {
       event.preventDefault();
       event.stopPropagation();
       this.linkActivationPointerId = event.pointerId;
