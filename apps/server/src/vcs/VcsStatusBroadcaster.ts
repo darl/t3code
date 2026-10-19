@@ -213,7 +213,7 @@ export class VcsStatusBroadcaster extends Context.Service<
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
     readonly refreshStatus: (
       cwd: string,
-      options?: { readonly localOnly?: boolean },
+      options?: { readonly localOnly?: boolean; readonly refreshPullRequest?: boolean },
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
     readonly refreshPullRequestStatus: (
       cwd: string,
@@ -526,8 +526,14 @@ export const make = Effect.gen(function* () {
       cwd,
       Effect.gen(function* () {
         const refreshUpstream = !Duration.isZero(yield* automaticFetchInterval);
-        // Bump the PR lookup epoch after earlier remote writers have finished.
-        yield* workflow.invalidateStatus(cwd);
+        // Focus/menu refreshes reuse the PR cache. Explicit refreshes and Git
+        // actions still bypass it so newly created PRs appear immediately.
+        if (options?.refreshPullRequest === false) {
+          yield* workflow.invalidateLocalStatus(cwd);
+          yield* workflow.invalidateRemoteStatus(cwd);
+        } else {
+          yield* workflow.invalidateStatus(cwd);
+        }
         const remoteRead = yield* readRemoteStatus(cwd, { refreshUpstream });
         // Fetch can move the base used for local Changes totals.
         const local = yield* workflow.localStatus({ cwd });

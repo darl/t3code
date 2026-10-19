@@ -2,9 +2,14 @@ import { type CheckpointRef } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
+import * as ArcCheckpointOps from "./ArcCheckpointOps.ts";
 import type { CheckpointStoreError } from "./Errors.ts";
+import * as ServerConfig from "../config.ts";
 import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
 export interface CaptureCheckpointInput {
@@ -77,18 +82,45 @@ export class CheckpointStore extends Context.Service<
 /** @public */
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const path = yield* Path.Path;
+  const serverConfig = yield* ServerConfig.ServerConfig;
+
+  // An arc mount cannot serve git's object-database plumbing, so its checkpoints
+  // live in a private shadow repository instead. The probe (arc status / arc
+  // info) is a service so tests can answer it without arc; the live one runs arc.
+  const probe = yield* Effect.serviceOption(ArcCheckpointOps.ArcCheckpointProbe);
+  const arc = yield* ArcCheckpointOps.make({
+    shadowRootDir: path.join(serverConfig.stateDir, "checkpoints", "arc"),
+  }).pipe(
+    Effect.provide(
+      Option.isSome(probe)
+        ? Layer.succeed(ArcCheckpointOps.ArcCheckpointProbe, probe.value)
+        : ArcCheckpointOps.probeLayer,
+    ),
+  );
 
   const resolveCheckpoints = Effect.fn("CheckpointStore.resolveCheckpoints")(function* (
     cwd: string,
   ) {
+    // Decided by the .arc/HEAD marker rather than by git detection: on a host with
+    // the arc-git shim an arc mount passes git detection, and on one without it
+    // git detection fails there — the shadow repository serves both the same.
+    if ((yield* arc.detectMountRoot(cwd)) !== null) {
+      return arc.ops;
+    }
     const handle = yield* vcsRegistry.resolve({ cwd });
     return handle.driver.checkpoints satisfies VcsCheckpointOps;
   });
 
-  const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = (cwd) =>
-    vcsRegistry
-      .detect({ cwd, requestedKind: "git" })
-      .pipe(Effect.map((repository) => repository !== null));
+  const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = Effect.fn(
+    "CheckpointStore.isGitRepository",
+  )(function* (cwd) {
+    if ((yield* arc.detectMountRoot(cwd)) !== null) {
+      return true;
+    }
+    const handle = yield* vcsRegistry.detect({ cwd, requestedKind: "git" });
+    return handle !== null;
+  });
 
   const captureCheckpoint: CheckpointStore["Service"]["captureCheckpoint"] = Effect.fn(
     "captureCheckpoint",
@@ -143,4 +175,4 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(CheckpointStore, make);
+export const layer = Layer.effect(CheckpointStore, make).pipe(Layer.provide(VcsProcess.layer));

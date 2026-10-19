@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import * as ArcanumCli from "../../apps/server/src/sourceControl/ArcanumCli.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeUtil from "node:util";
 import * as NodeCrypto from "node:crypto";
@@ -143,6 +144,7 @@ await Effect.runPromise(
         ProcessRunner.layer,
         SourceControlProviderRegistry.layer.pipe(
           Layer.provide(SourceControlBuiltInDrivers.layer),
+          Layer.provide(ArcanumCli.layer),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer))),
           Layer.provide(GitVcsDriver.layer),

@@ -255,7 +255,7 @@ function mapContentMatchRanges(
 }
 
 // Post-filter whole words: consuming boundary regexes swallow adjacent separators and widen ranges; \b misses punctuation edges.
-function isWholeWordRange(
+export function isWholeWordRange(
   line: string,
   range: { readonly start: number; readonly end: number },
 ): boolean {

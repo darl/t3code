@@ -147,6 +147,10 @@ export class GitManager extends Context.Service<
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+    readonly resolveWorktreeThreadPath: (input: {
+      readonly cwd: string;
+      readonly worktreePath: string;
+    }) => Effect.Effect<string>;
     readonly runStackedAction: (
       input: GitRunStackedActionInput,
       options?: GitRunStackedActionOptions,
@@ -243,7 +247,13 @@ interface BranchHeadContext {
 }
 
 export function pullRequestRepositoryKey(value: string): string | null {
-  const repositoryUrl = sourceControlDefinitions.parseChangeRequestUrl(value)?.link.repositoryUrl;
+  const parsed = sourceControlDefinitions.parseChangeRequestUrl(value);
+  if (parsed?.definition.kind === "arcanum") {
+    return sourceControlDefinitions.canonicalRepositoryKey(
+      `${parsed.link.host}/${parsed.link.repository}`,
+    );
+  }
+  const repositoryUrl = parsed?.link.repositoryUrl;
   return repositoryUrl === undefined
     ? null
     : sourceControlDefinitions.repositoryKeyFromRemote(repositoryUrl);
@@ -1094,6 +1104,46 @@ export const make = Effect.gen(function* () {
   const canonicalizeExistingPath = (value: string) =>
     fileSystem.realPath(value).pipe(Effect.orElseSucceed(() => value));
   const normalizeStatusCacheKey = canonicalizeExistingPath;
+
+  // Threads created from a project rooted in a repository subdirectory should
+  // land in that same subdirectory of the worktree, not at the worktree root.
+  // Best-effort: any resolution failure falls back to the given worktree path.
+  const resolveWorktreeThreadPath = Effect.fn("resolveWorktreeThreadPath")(function* (input: {
+    readonly cwd: string;
+    readonly worktreePath: string;
+  }) {
+    const toplevelResult = yield* gitCore
+      .execute({
+        operation: "GitManager.resolveWorktreeThreadPath",
+        cwd: input.cwd,
+        args: ["rev-parse", "--show-toplevel"],
+        timeoutMs: 5_000,
+        allowNonZeroExit: true,
+      })
+      .pipe(Effect.orElseSucceed(() => null));
+    if (toplevelResult === null || toplevelResult.exitCode !== 0) {
+      return input.worktreePath;
+    }
+    const toplevel = toplevelResult.stdout.trim();
+    if (toplevel.length === 0) {
+      return input.worktreePath;
+    }
+    const projectCwd = yield* canonicalizeExistingPath(input.cwd);
+    const relativeSubpath = path.relative(yield* canonicalizeExistingPath(toplevel), projectCwd);
+    if (
+      relativeSubpath.length === 0 ||
+      relativeSubpath.startsWith("..") ||
+      path.isAbsolute(relativeSubpath)
+    ) {
+      return input.worktreePath;
+    }
+    const threadPath = path.join(input.worktreePath, relativeSubpath);
+    const threadPathIsDirectory = yield* fileSystem.stat(threadPath).pipe(
+      Effect.map((info) => info.type === "Directory"),
+      Effect.orElseSucceed(() => false),
+    );
+    return threadPathIsDirectory ? threadPath : input.worktreePath;
+  });
   const nonRepositoryStatusDetails: GitVcsDriver.GitStatusDetails = {
     isRepo: false,
     hasOriginRemote: false,
@@ -2013,7 +2063,10 @@ export const make = Effect.gen(function* () {
       const upstreamBranch = extractBranchNameFromRemoteRef(upstreamRef, {
         remoteName: headContext.remoteName,
       });
-      if (upstreamBranch.length > 0 && upstreamBranch !== branch) {
+      // Arc publishes X as users/<login>/X; that upstream aliases the same branch, even for users/-named branches, so skip it when choosing a stacked base.
+      const publishAlias = /^users\/[^/]+\/(.+)$/.exec(upstreamBranch);
+      const isArcPublishAlias = publishAlias?.[1] === branch;
+      if (upstreamBranch.length > 0 && upstreamBranch !== branch && !isArcPublishAlias) {
         return { baseBranch: upstreamBranch, baseRef: upstreamBranch };
       }
     }
@@ -2799,7 +2852,7 @@ export const make = Effect.gen(function* () {
           return {
             pullRequest,
             branch: localPullRequestBranch,
-            worktreePath,
+            worktreePath: yield* resolveWorktreeThreadPath({ cwd: input.cwd, worktreePath }),
             isOnPullRequestHead: false,
           };
         }
@@ -2869,7 +2922,7 @@ export const make = Effect.gen(function* () {
         return {
           pullRequest,
           branch: localPullRequestBranch,
-          worktreePath,
+          worktreePath: yield* resolveWorktreeThreadPath({ cwd: input.cwd, worktreePath }),
           isOnPullRequestHead: refreshed.onTarget,
         };
       });
@@ -2978,7 +3031,10 @@ export const make = Effect.gen(function* () {
       return {
         pullRequest,
         branch: worktree.worktree.refName,
-        worktreePath: worktree.worktree.path,
+        worktreePath: yield* resolveWorktreeThreadPath({
+          cwd: input.cwd,
+          worktreePath: worktree.worktree.path,
+        }),
         isOnPullRequestHead: true,
       };
     }).pipe(Effect.ensuring(invalidateStatus(input.cwd)));
@@ -3234,6 +3290,7 @@ export const make = Effect.gen(function* () {
     invalidateStatus,
     resolvePullRequest,
     preparePullRequestThread,
+    resolveWorktreeThreadPath,
     runStackedAction,
     subscribePullRequestStateChanges: PubSub.subscribe(pullRequestStateChanges).pipe(
       Effect.map((subscription) => Stream.fromSubscription(subscription)),

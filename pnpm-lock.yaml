@@ -2135,6 +2135,9 @@ importers:
 
   packages/source-control-definitions:
     dependencies:
+      '@t3tools/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@t3tools/source-control-azure-devops':
         specifier: workspace:*
         version: link:../source-control-azure-devops

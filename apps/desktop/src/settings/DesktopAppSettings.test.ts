@@ -26,6 +26,7 @@ const DesktopSettingsPatch = Schema.Struct({
   ),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
+  sshRemoteServerEntryPath: Schema.optionalKey(Schema.NullOr(Schema.String)),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
@@ -179,6 +180,7 @@ describe("DesktopSettings", () => {
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
           mainWindowMaximized: false,
           serverExposureMode: "network-accessible",
+          sshRemoteServerEntryPath: null,
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
           updateChannel: "latest",
@@ -274,6 +276,7 @@ describe("DesktopSettings", () => {
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",
+          sshRemoteServerEntryPath: null,
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           updateChannel: "nightly",
@@ -303,6 +306,7 @@ describe("DesktopSettings", () => {
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",
+          sshRemoteServerEntryPath: null,
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           updateChannel: "latest",
@@ -387,6 +391,23 @@ describe("DesktopSettings", () => {
         const loaded = yield* settings.load;
         assert.equal(loaded.wslBackendEnabled, true);
         assert.equal(loaded.wslDistro, "Ubuntu-22.04");
+      }),
+    ),
+  );
+  it.effect("reads an absolute ssh remote server entry path and drops relative ones", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* writeSettingsPatch({
+          sshRemoteServerEntryPath: " /home/user/t3code/apps/server/dist/bin.mjs ",
+        });
+        assert.equal(
+          (yield* settings.load).sshRemoteServerEntryPath,
+          "/home/user/t3code/apps/server/dist/bin.mjs",
+        );
+
+        yield* writeSettingsPatch({ sshRemoteServerEntryPath: "t3code/apps/server/dist/bin.mjs" });
+        assert.equal((yield* settings.load).sshRemoteServerEntryPath, null);
       }),
     ),
   );

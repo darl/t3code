@@ -436,6 +436,62 @@ describe("GhosttyTerminalSurface visibility", () => {
     },
   );
 
+  it("does not open file paths with an ordinary click", async () => {
+    const harness = createHarness();
+    const onLinkActivate = vi.fn();
+    const surface = await harness.create({ onLinkActivate });
+    surface.write("/tmp/file.ts");
+    harness.flushFrame();
+
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointerup", 5, 0);
+    expect(onLinkActivate).not.toHaveBeenCalled();
+  });
+
+  it("selects file paths with an ordinary drag", async () => {
+    const harness = createHarness();
+    const onLinkActivate = vi.fn();
+    const surface = await harness.create({ onLinkActivate });
+    surface.write("/tmp/file.ts");
+    harness.flushFrame();
+
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointermove", 37, 1);
+    harness.pointer("pointerup", 37, 0);
+    expect(onLinkActivate).not.toHaveBeenCalled();
+    expect(surface.getSelection()).toBe("/tmp/");
+  });
+
+  it.each([{ ctrlKey: true }, { metaKey: true }])(
+    "opens file paths with a modifier click: %j",
+    async (modifiers) => {
+      const harness = createHarness();
+      const onLinkActivate = vi.fn();
+      const surface = await harness.create({ onLinkActivate });
+      surface.write("/tmp/file.ts");
+      harness.flushFrame();
+
+      harness.pointer("pointerdown", 5, 1, modifiers);
+      harness.pointer("pointerup", 5, 0, modifiers);
+      expect(onLinkActivate).toHaveBeenCalledWith("/tmp/file.ts", expect.any(Event));
+      expect(onLinkActivate).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps Shift selection available over file paths with a modifier", async () => {
+    const harness = createHarness();
+    const onLinkActivate = vi.fn();
+    const surface = await harness.create({ onLinkActivate });
+    surface.write("/tmp/file.ts");
+    harness.flushFrame();
+
+    harness.pointer("pointerdown", 5, 1, { shiftKey: true, ctrlKey: true });
+    harness.pointer("pointermove", 37, 1, { shiftKey: true, ctrlKey: true });
+    harness.pointer("pointerup", 37, 0, { shiftKey: true, ctrlKey: true });
+    expect(onLinkActivate).not.toHaveBeenCalled();
+    expect(surface.getSelection()).toBe("/tmp/");
+  });
+
   it("does not activate a link replaced before pointer release", async () => {
     const harness = createHarness();
     const onLinkActivate = vi.fn();

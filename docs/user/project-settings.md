@@ -170,6 +170,11 @@ applies when the project and environment are both on **Inherit**.
 
 ## Worktree location
 
+When a new thread's requested base branch no longer exists, T3 uses the repository's default
+branch and shows the replacement in workspace preparation. An existing local base is kept when
+the remote has no matching branch. Fetch errors caused by network or access problems still stop
+preparation.
+
 New worktrees go in the `worktrees` folder of the T3 home directory. To put them somewhere else,
 such as another drive, set **Settings → Worktrees → Worktree location** to an absolute path like
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they

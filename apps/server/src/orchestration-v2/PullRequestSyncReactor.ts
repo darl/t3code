@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type OrchestrationProjectShell,
   isOrchestrationV2WorkActive,
   type OrchestrationV2TurnItem,
   type PullRequestSummary,
@@ -32,6 +33,7 @@ import * as Stream from "effect/Stream";
 
 import * as GitManager from "../git/GitManager.ts";
 import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -282,6 +284,30 @@ function sameLayerNumbers(left: ThreadPullRequestStack, right: ThreadPullRequest
   );
 }
 
+function linkNeedsUrlRepair(link: ThreadPullRequestLink): boolean {
+  const parsed = sourceControlDefinitions.parseChangeRequestUrl(link.url);
+  return (
+    parsed === null ||
+    (normalizeThreadPullRequestKey(link).host === "arcadia" && parsed.definition.kind !== "arcanum")
+  );
+}
+
+// Old Arcanum links used GitHub-shaped guesses; rebuild those from the project's provider.
+function correctedLinkUrl(
+  link: ThreadPullRequestLink,
+  project: OrchestrationProjectShell | undefined,
+): string | null {
+  if (!linkNeedsUrlRepair(link)) return null;
+  const identity = project?.repositoryIdentity;
+  const url = sourceControlDefinitions.get(identity?.provider).changeRequestUrl({
+    host: normalizeThreadPullRequestKey(link).host,
+    repository: link.repository,
+    number: link.number,
+    remoteUrl: identity?.locator.remoteUrl,
+  });
+  return url === null || url === link.url ? null : url;
+}
+
 function skipReason(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
   return error instanceof Error ? error.message : String(error);
@@ -314,6 +340,7 @@ export class PullRequestSyncReactor extends Context.Service<
 export const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const projectService = yield* ProjectService.ProjectService;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const git = yield* GitManager.GitManager;
   const crypto = yield* Crypto.Crypto;
@@ -357,7 +384,9 @@ export const make = Effect.gen(function* () {
   const logSkipped =
     (message: string, fields: Record<string, unknown>) =>
     <E>(cause: Cause.Cause<E>): Effect.Effect<void, E> =>
-      Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.logWarning(message, fields);
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause)
+        : Effect.logWarning(message, { ...fields, cause: Cause.pretty(cause) });
 
   const sweep = Effect.fn("PullRequestSyncReactor.sweep")(function* (scope: "all" | "requested") {
     const threads = yield* projections.getThreadsWithPullRequests();
@@ -365,9 +394,48 @@ export const make = Effect.gen(function* () {
     const nowMs = DateTime.toEpochMillis(now);
     const nowIso = DateTime.formatIso(now);
 
+    const projectIds = [
+      ...new Set(
+        threads
+          .filter((thread) =>
+            visibleThreadPullRequests(thread.pullRequests ?? []).some((link) =>
+              linkNeedsUrlRepair(link),
+            ),
+          )
+          .map((thread) => thread.projectId),
+      ),
+    ];
+    const projects = new Map(
+      (projectIds.length === 0 ? [] : yield* projectService.listShells({ projectIds })).map(
+        (project) => [project.id, project],
+      ),
+    );
     const groups = new Map<string, Array<LinkEntry>>();
     for (const thread of threads) {
       for (const link of visibleThreadPullRequests(thread.pullRequests ?? [])) {
+        const correctedUrl = correctedLinkUrl(link, projects.get(thread.projectId));
+        if (correctedUrl !== null) {
+          const uuid = yield* crypto.randomUUIDv4();
+          yield* engine
+            .dispatch({
+              type: "thread.pull-request.link",
+              commandId: CommandId.make(`server:pr-url-fix:${thread.id}:${uuid}`),
+              threadId: thread.id,
+              host: normalizeThreadPullRequestKey(link).host,
+              repository: link.repository,
+              number: link.number,
+              url: correctedUrl,
+              source: link.source,
+            })
+            .pipe(
+              Effect.catchCause(
+                logSkipped("pull request link url fix skipped", {
+                  threadId: thread.id,
+                  number: link.number,
+                }),
+              ),
+            );
+        }
         // Reads depend on the project's checkout and credentials, including their failures.
         const key = `${thread.projectId}\0${threadPullRequestKeyOf(link)}`;
         const entries = groups.get(key) ?? [];

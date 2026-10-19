@@ -1,3 +1,4 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import type { RepositoryIdentity, SourceControlProviderError } from "@t3tools/contracts";
 import { repositoryPathFromRemoteUrl } from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as Cache from "effect/Cache";
@@ -135,6 +136,14 @@ class RepositoryIdentityCacheKey extends Data.Class<{
   readonly isBare: boolean;
 }> {}
 
+/** What git says about a folder outside any checkout, which is what an arc mount looks like. */
+function isNotGitRepository(result: {
+  readonly code: number | null;
+  readonly stderr: string;
+}): boolean {
+  return result.code === 128 || result.stderr.toLowerCase().includes("not a git repository");
+}
+
 const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.resolveCacheKey")(
   function* (cwd: string) {
     const processRunner = yield* ProcessRunner.ProcessRunner;
@@ -187,9 +196,81 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.
         ? new RepositoryIdentityCacheKey({ rootPath, isBare: true })
         : null;
     }
+    if (isNotGitRepository(topLevelResult.value)) {
+      const rootPath = yield* resolveArcadiaRoot(cwd);
+      if (rootPath !== null) return new RepositoryIdentityCacheKey({ rootPath, isBare: false });
+    }
     return null;
   },
 );
+
+/** How every Arcadia working copy names its remote; the whole monorepo is the one repository. */
+const ARCADIA_REMOTE_URL = "arc://arcadia/arcadia";
+/**
+ * The one repository identity every arc mount resolves to. Arcanum review URLs
+ * (https://a.yandex-team.ru/review/<n>) name no repository path, so anything
+ * that derives a repository key from a PR URL must map them onto this constant.
+ */
+export const ARCADIA_CANONICAL_KEY = "arcadia/arcadia";
+export const ARCANUM_REVIEW_HOST = "a.yandex-team.ru";
+
+/** The arc mount root, or null outside a mount: `arc root` prints only inside one. */
+const resolveArcadiaRoot = Effect.fn("RepositoryIdentityResolver.resolveArcadiaRoot")(function* (
+  cwd: string,
+): Effect.fn.Return<string | null, never, ProcessRunner.ProcessRunner> {
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const rootResult = yield* processRunner
+    .run({
+      command: "arc",
+      args: ["root"],
+      cwd,
+      timeoutBehavior: "timedOutResult",
+    })
+    .pipe(Effect.option);
+  if (rootResult._tag === "None" || rootResult.value.code !== 0) {
+    return null;
+  }
+  const rootPath = rootResult.value.stdout.trim();
+  return rootPath.length > 0 ? rootPath : null;
+});
+
+/**
+ * The one identity every Arcadia checkout shares, whichever probe discovered it. Both roads —
+ * `arc root` and a git shim's remote listing — must converge on byte-identical
+ * canonicalKey/displayName/provider, so host bucketing ("arcadia") and de-duplication agree
+ * whichever answered. The locator keeps whatever the discovering probe really saw.
+ */
+function arcadiaIdentity(input: {
+  readonly remoteName: string;
+  readonly remoteUrl: string;
+  readonly rootPath: string;
+}): RepositoryIdentity {
+  return {
+    canonicalKey: ARCADIA_CANONICAL_KEY,
+    locator: {
+      source: "git-remote",
+      remoteName: input.remoteName,
+      remoteUrl: input.remoteUrl,
+    },
+    rootPath: input.rootPath,
+    displayName: "arcadia",
+    // The same answer detectSourceControlProviderFromGitRemoteUrl gives for the remote's url,
+    // spelled as a constant because normalizeGitRemoteUrl cannot read the arc:// scheme.
+    provider: SourceControlProviderKind.make("arcanum"),
+    owner: "arcadia",
+    name: "arcadia",
+  };
+}
+
+// Arc mounts lack a Git database; arc root identifies the mount, and every mount belongs to arcadia/arcadia.
+const resolveArcadiaIdentity = Effect.fn("RepositoryIdentityResolver.resolveArcadia")(function* (
+  cacheKey: string,
+): Effect.fn.Return<RepositoryIdentity | null, never, ProcessRunner.ProcessRunner> {
+  const rootPath = yield* resolveArcadiaRoot(cacheKey);
+  return rootPath === null
+    ? null
+    : arcadiaIdentity({ remoteName: "arcadia", remoteUrl: ARCADIA_REMOTE_URL, rootPath });
+});
 
 const resolveRepositoryIdentityFromCacheKey = Effect.fn(
   "RepositoryIdentityResolver.resolveFromCacheKey",
@@ -206,18 +287,24 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
     })
     .pipe(Effect.option);
   if (remoteResult._tag === "None" || remoteResult.value.code !== 0) {
-    return null;
+    // Not a git checkout at all, which is what an arc mount usually looks like from here.
+    return yield* resolveArcadiaIdentity(cacheKey.rootPath);
   }
 
   const remotes = parseRemoteFetchUrls(remoteResult.value.stdout);
   const remote = pickPrimaryRemote(remotes);
-  return remote
-    ? buildRepositoryIdentity({
-        ...remote,
-        originUrl: remotes.get("origin"),
-        rootPath: cacheKey.rootPath,
-      })
-    : null;
+  if (remote === null) {
+    return null;
+  }
+  // The git shim reports arc:// remotes, which Git URL normalization cannot read; use the same identity as arc root.
+  if (remote.remoteUrl.trim().toLowerCase() === ARCADIA_REMOTE_URL) {
+    return arcadiaIdentity({ ...remote, rootPath: cacheKey.rootPath });
+  }
+  return buildRepositoryIdentity({
+    ...remote,
+    originUrl: remotes.get("origin"),
+    rootPath: cacheKey.rootPath,
+  });
 });
 
 export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (

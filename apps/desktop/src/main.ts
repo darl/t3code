@@ -103,9 +103,17 @@ const layerDesktopEnvironment = Layer.unwrap(
   }),
 );
 
+// Fork versions have no published archive; a configured remote entry allows source builds.
 const resolveDesktopSshCliRunner = (
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
+  settings: DesktopAppSettings.DesktopSettings,
 ): RemoteT3RunnerOptions => {
+  if (settings.sshRemoteServerEntryPath !== null) {
+    return {
+      nodeScriptPath: settings.sshRemoteServerEntryPath,
+      nodeEngineRange: serverPackageJson.engines.node,
+    };
+  }
   const devRemoteEntryPath = Option.getOrUndefined(environment.devRemoteT3ServerEntryPath);
   if (environment.isDevelopment && devRemoteEntryPath !== undefined) {
     return {
@@ -119,8 +127,11 @@ const resolveDesktopSshCliRunner = (
 const layerDesktopSshEnvironment = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const settings = yield* DesktopAppSettings.DesktopAppSettings;
     return DesktopSshEnvironment.layer({
-      resolveCliRunner: Effect.succeed(resolveDesktopSshCliRunner(environment)),
+      resolveCliRunner: settings.get.pipe(
+        Effect.map((currentSettings) => resolveDesktopSshCliRunner(environment, currentSettings)),
+      ),
     });
   }),
 );

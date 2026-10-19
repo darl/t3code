@@ -2037,6 +2037,12 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* writeTextFile(cwd, "tab\tand\nnewline.txt", "unusual path\n");
         }
         yield* git(cwd, ["add", "."]);
+        // The preview compares the base with working files, so the disk mode must match the index.
+        if ((yield* HostProcess.Platform) !== "win32") {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          yield* fs.chmod(path.join(cwd, "mode-only.sh"), 0o755);
+        }
         yield* git(cwd, ["update-index", "--chmod=+x", "mode-only.sh"]);
         yield* git(cwd, ["commit", "-m", "rename and add files"]);
         const preview = yield* driver.getReviewDiffPreview({
@@ -2048,6 +2054,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
         for (const path of ["renamed.md", "[literal].txt", " leading.txt", "mode-only.sh"]) {
           const stat = branch.files!.find((file) => file.path === path)!;
+          assert.isDefined(stat, `Missing diff statistics for ${path}`);
           const request = yield* decodeReviewDiffPreviewInput({
             cwd,
             baseRef: initialBranch,
@@ -3672,6 +3679,30 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("classifies Git's reason when worktree add fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "bad-base");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: "no-such-base-ref",
+            newRefName: "feature/bad-base",
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.equal(error.detail, "git worktree add failed");
+        assert.equal(error.reason, "ref_not_found");
+        assert.notInclude(error.message, "no-such-base-ref");
+      }),
+    );
+
     it.effect("creates worktrees under the configured worktrees directory", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -3739,7 +3770,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           assert.equal(yield* git(created.worktree.path, ["branch", "--show-current"]), branch);
           assert.include(
             yield* git(cwd, ["-c", "core.quotePath=false", "worktree", "list", "--porcelain"]),
-            `worktree ${created.worktree.path}`,
+            `worktree ${NodeFS.realpathSync.native(created.worktree.path)}`,
           );
           folders.add(folder);
         }
@@ -4076,6 +4107,38 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
         const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
         assert.notInclude(registered, "stale");
+      }),
+    );
+
+    it.effect("removes a worktree when given a path inside the worktree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "packages/app/index.ts", "export {};\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add subdirectory"]);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-"),
+          "subdir-worktree",
+        );
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/subdir-worktree",
+        });
+
+        // Thread worktree paths may point at the project subdirectory rather
+        // than the worktree root; removal must still remove the worktree.
+        yield* driver.removeWorktree({
+          cwd,
+          path: pathService.join(worktreePath, "packages", "app"),
+        });
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
       }),
     );
   });

@@ -17,6 +17,10 @@ then copy. Cmd+A on macOS and Ctrl+Shift+A elsewhere select the same output.
 Ctrl+A still moves to the beginning of shell input on Windows and Linux.
 Jump to latest in the context menu returns to the current output.
 
+To open a file path from terminal output in your preferred editor, hold Command
+on macOS or Ctrl on Windows and Linux while clicking it. Ordinary clicks and
+drags select terminal text. Web links open with an ordinary click.
+
 ## fish
 
 T3 Code starts fish with `no-query-term`, avoiding startup waits for terminal
