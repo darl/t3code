@@ -1,3 +1,4 @@
+import * as ArcanumCli from "./sourceControl/ArcanumCli.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
@@ -388,6 +389,7 @@ const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsPro
 
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
   Layer.provideMerge(SourceControlBuiltInDrivers.layer),
+  Layer.provide(ArcanumCli.layer),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(layerVcsDriverRegistry),
 );
@@ -644,6 +646,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     }),
   ).pipe(
     Layer.provideMerge(PullRequestSyncReactor.layer),
+    Layer.provide(RuntimeLayer.layerProjectService),
     Layer.provide(layerPullRequestService),
     Layer.provide(ProjectionStoreV2.layer),
   ),

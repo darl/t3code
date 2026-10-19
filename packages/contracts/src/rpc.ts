@@ -1463,6 +1463,7 @@ const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
   payload: Schema.Struct({
     ...VcsStatusInput.fields,
     localOnly: Schema.optional(Schema.Boolean),
+    refreshPullRequest: Schema.optional(Schema.Boolean),
   }),
   success: VcsStatusResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),

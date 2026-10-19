@@ -5,6 +5,7 @@ import type {
   ChangeRequestTerminology,
   SourceControlDefinition,
 } from "@t3tools/client-runtime/source-control-clients";
+import { ArcanumIcon } from "./components/Icons";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { SourceControlIconArtwork } from "./components/SourceControlIconArtwork";
 
@@ -16,6 +17,7 @@ const SOURCE_CONTROL_ICONS = new WeakMap<SourceControlDefinition, SourceControlI
 
 /** One component per definition, so a host's icon keeps its identity across renders. */
 export function sourceControlIcon(definition: SourceControlDefinition): SourceControlIcon {
+  if (definition.kind === "arcanum") return ArcanumIcon;
   const artwork = definition.icon;
   if (artwork === null) return PullRequestGlyph.pullRequest;
   let Icon = SOURCE_CONTROL_ICONS.get(definition);
