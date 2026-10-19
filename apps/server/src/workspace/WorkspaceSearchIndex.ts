@@ -262,7 +262,7 @@ function mapContentMatchRanges(
  * regex: consuming boundaries such as `(?:^|\W)` swallow the separator between adjacent matches
  * and widen the reported ranges, and `\b` cannot match punctuation-edged queries at all.
  */
-function isWholeWordRange(
+export function isWholeWordRange(
   line: string,
   range: { readonly start: number; readonly end: number },
 ): boolean {

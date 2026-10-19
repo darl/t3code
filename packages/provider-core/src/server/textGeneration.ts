@@ -84,6 +84,8 @@ export interface ReviewGuideGenerationInput {
   description: string;
   baseBranch: string;
   baseCommit: string;
+  /** Server-prepared evidence, readable even when the model cannot run repository commands. */
+  preparedChange?: { patchPath: string; filesPath: string } | undefined;
   settledReview: string;
   instructions?: string | undefined;
   stack?: ReadonlyArray<ReviewGuideStackLayer> | undefined;

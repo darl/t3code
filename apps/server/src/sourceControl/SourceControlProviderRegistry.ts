@@ -12,9 +12,9 @@ import {
   SourceControlProviderError,
   type SourceControlProviderDiscoveryItem,
 } from "@t3tools/contracts";
-import type {} from "@t3tools/contracts";
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
+import * as ArcanumSourceControlProvider from "./ArcanumSourceControlProvider.ts";
 import * as BuiltInDrivers from "./builtInDrivers.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import {
@@ -367,7 +367,15 @@ export const make = Effect.gen(function* () {
       })),
     ),
   );
-  return yield* makeWithProviders(drivers);
+  const arcanum = yield* ArcanumSourceControlProvider.make;
+  return yield* makeWithProviders([
+    ...drivers,
+    {
+      kind: SourceControlProviderKind.make("arcanum"),
+      provider: arcanum,
+      discovery: ArcanumSourceControlProvider.discovery,
+    },
+  ]);
 });
 
 export const layer = Layer.effect(SourceControlProviderRegistry, make);

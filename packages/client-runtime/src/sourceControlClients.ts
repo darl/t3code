@@ -1,3 +1,4 @@
+import { arcanumClientDefinition } from "./arcanumClientDefinition.ts";
 import * as AzureDevOps from "@t3tools/source-control-azure-devops/client/definition";
 import * as Bitbucket from "@t3tools/source-control-bitbucket/client/definition";
 import {
@@ -29,6 +30,7 @@ const BUILT_IN_SOURCE_CONTROL_CLIENTS = [
   Forgejo.definition,
   Bitbucket.definition,
   AzureDevOps.definition,
+  arcanumClientDefinition,
 ];
 
 export const sourceControlClients = makeSourceControlClientRegistry(

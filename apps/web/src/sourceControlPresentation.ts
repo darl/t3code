@@ -6,6 +6,7 @@ import type {
   SourceControlClientDefinition,
 } from "@t3tools/client-runtime/source-control-clients";
 import {
+  ArcanumIcon,
   AzureDevOpsIcon,
   BitbucketIcon,
   ForgejoIcon,
@@ -26,6 +27,7 @@ const SOURCE_CONTROL_ICONS: Partial<Record<string, SourceControlIcon>> = {
   bitbucket: BitbucketIcon,
   "azure-devops": AzureDevOpsIcon,
   gitcafe: GitCafeIcon,
+  arcanum: ArcanumIcon,
 };
 
 export function sourceControlIcon(definition: SourceControlClientDefinition): SourceControlIcon {

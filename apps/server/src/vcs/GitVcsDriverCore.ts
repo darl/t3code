@@ -4201,10 +4201,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const removeWorktree: GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"] = Effect.fn(
     "removeWorktree",
   )(function* (input) {
-    // Git also matches a worktree by its short name, which can name a different
-    // folder than this path. Resolving it once keeps Git, the Windows deletion
-    // in removeLinkedWorktree, and the leftover cleanup below on one directory.
-    const target = path.resolve(input.cwd, input.path);
+    // Thread worktree paths may point into a subdirectory of the worktree
+    // (subdirectory-rooted projects); `git worktree remove` needs the root.
+    const toplevelResult = yield* executeGit(
+      "GitVcsDriver.removeWorktree.toplevel",
+      path.resolve(input.cwd, input.path),
+      ["rev-parse", "--show-toplevel"],
+      {
+        timeoutMs: 5_000,
+        allowNonZeroExit: true,
+      },
+    ).pipe(Effect.orElseSucceed(() => null));
+    const toplevel =
+      toplevelResult !== null && toplevelResult.exitCode === 0 ? toplevelResult.stdout.trim() : "";
+    const target = path.resolve(input.cwd, toplevel.length > 0 ? toplevel : input.path);
     const result = yield* removeLinkedWorktree({
       operation: "GitVcsDriver.removeWorktree",
       cwd: input.cwd,

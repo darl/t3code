@@ -282,14 +282,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function scheduledTaskWorkspaceStrategy(
-  boundToThread: boolean,
-): ScheduledTask["workspaceStrategy"] {
-  return boundToThread
-    ? { type: "root" }
-    : { type: "worktree", baseRef: "main", startFromOrigin: true };
-}
-
 function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): OrchestratorMcpScheduledTask {
   return {
     scheduledTaskId: task.id,
@@ -1068,6 +1060,46 @@ const make = Effect.gen(function* () {
   const gitDriver = yield* GitVcsDriver.GitVcsDriver;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
 
+  const scheduledTaskWorkspaceStrategy = Effect.fn(
+    "OrchestratorMcpService.scheduledTaskWorkspaceStrategy",
+  )(function* (boundToThread: boolean, projectId: ProjectId) {
+    if (boundToThread) return { type: "root" } as const;
+    const project = yield* projects.getById(projectId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorMcpFailure({
+            code: "orchestration_error",
+            message: `Could not load the scheduled task project: ${errorMessage(cause)}`,
+          }),
+      ),
+    );
+    if (Option.isNone(project)) {
+      return yield* new OrchestratorMcpFailure({
+        code: "invalid_request",
+        message: "The scheduled task project was not found.",
+      });
+    }
+    const baseRef = yield* gitDriver
+      .resolveDefaultBranchName(project.value.workspaceRoot, "origin")
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorMcpFailure({
+              code: "orchestration_error",
+              message: `Could not determine the repository's default branch for scheduled worktrees: ${errorMessage(cause)}`,
+            }),
+        ),
+      );
+    if (baseRef === null) {
+      return yield* new OrchestratorMcpFailure({
+        code: "invalid_request",
+        message:
+          "Could not determine the repository's default branch for scheduled worktrees. Configure origin/HEAD before creating an unbound scheduled task.",
+      });
+    }
+    return { type: "worktree", baseRef, startFromOrigin: true } as const;
+  });
+
   const requireProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(
       Effect.mapError((error) =>
@@ -1834,7 +1866,7 @@ const make = Effect.gen(function* () {
         schedule: input.schedule,
         projectId,
         threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
-        workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
+        workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(bindToCurrentThread, projectId),
         modelSelection,
         runtimeMode: limits.runtimeMode,
         interactionMode: limits.interactionMode,
@@ -1908,7 +1940,7 @@ const make = Effect.gen(function* () {
         const workspaceStrategy =
           input.bindToCurrentThread === undefined
             ? existing.workspaceStrategy
-            : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+            : yield* scheduledTaskWorkspaceStrategy(input.bindToCurrentThread, existing.projectId);
         const upsertInput: ScheduledTaskUpsertInput = {
           id: existing.id,
           title: input.title ?? existing.title,
