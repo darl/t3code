@@ -18,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
 import * as Electron from "electron";
+import serverPackageJson from "../../server/package.json" with { type: "json" };
 
 import * as NetService from "@t3tools/shared/Net";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -112,10 +113,18 @@ const layerDesktopSshEnvironment = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const env = yield* HostProcess.Environment;
+    const settings = yield* DesktopAppSettings.DesktopAppSettings;
     return DesktopSshEnvironment.layer({
-      // Per connect: the login shell's environment is installed after this layer is built.
-      resolveCliRunner: Effect.sync(() =>
-        DesktopSshEnvironment.resolveDesktopSshCliRunner(environment, env),
+      resolveCliRunner: settings.get.pipe(
+        Effect.map((currentSettings) => {
+          if (currentSettings.sshRemoteServerEntryPath !== null) {
+            return {
+              nodeScriptPath: currentSettings.sshRemoteServerEntryPath,
+              nodeEngineRange: serverPackageJson.engines.node,
+            };
+          }
+          return DesktopSshEnvironment.resolveDesktopSshCliRunner(environment, env);
+        }),
       ),
       resolveLauncherId: yield* Effect.cached(
         DesktopSshEnvironment.readOrCreateLauncherId(

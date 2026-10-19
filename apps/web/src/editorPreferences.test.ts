@@ -17,6 +17,12 @@ const state = vi.hoisted(() => ({
 vi.mock("react", () => ({ useCallback: (callback: unknown) => callback }));
 vi.mock("./state/shell", () => ({ shellEnvironment: { openInEditor: "openInEditor" } }));
 vi.mock("./state/use-atom-command", () => ({ useAtomCommand: () => state.run }));
+vi.mock("./remoteOpen", () => ({
+  useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }),
+  useRemoteCapableEditors: () => [],
+  useRemoteOpenHint: () => [false, vi.fn()],
+  openRemoteEditorUrl: vi.fn(),
+}));
 vi.mock("./state/session", () => ({
   readEnvironmentScope: (environmentId: string, scope: string) =>
     scope === AuthOrchestrationOperateScope && state.allowed.has(environmentId),

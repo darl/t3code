@@ -33,6 +33,10 @@ Configure worktrees in **Settings → Worktrees** (environment default or projec
 - **Worktree location** (per machine): Set an absolute path (e.g. `D:\worktrees` or `~/worktrees`) to store new worktrees elsewhere. Existing worktrees stay where they are; cleanup covers both folders.
 - **Fast worktree checkout (macOS beta)**: Enable **Settings → Labs → Fast worktree checkout** (Git 2.42+) to clone new worktrees via APFS copy-on-write from a local cache. Falls back to normal checkout for cross-drive paths, sparse checkouts, or Git LFS/filter repos.
 
+When a new thread’s requested base branch no longer exists, T3 uses the repository’s default
+branch and shows the replacement in workspace preparation. An existing local base is kept when
+the remote has no matching branch. Network or access errors still stop preparation.
+
 ### Storage cleanup
 
 Enable automatic cleanup in **Settings → Worktrees → Cleanup** (off by default; runs on startup, on change, and hourly). Projects can set **Automatic worktree cleanup** to **Inherit**, **Off**, or **Custom**.

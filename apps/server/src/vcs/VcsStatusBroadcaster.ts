@@ -235,7 +235,7 @@ export class VcsStatusBroadcaster extends Context.Service<
     readonly refreshAfterCheckout: (cwd: string) => Effect.Effect<void>;
     readonly refreshStatus: (
       cwd: string,
-      options?: { readonly localOnly?: boolean },
+      options?: { readonly localOnly?: boolean; readonly refreshPullRequest?: boolean },
     ) => Effect.Effect<VcsRefreshStatusResult, GitManagerServiceError>;
     readonly refreshPullRequestStatus: (
       cwd: string,
@@ -765,13 +765,23 @@ export const make = Effect.gen(function* () {
   });
 
   const refreshRemoteAndLocalTotals = Effect.fn("VcsStatusBroadcaster.refreshRemoteAndLocalTotals")(
-    function* (cwd: string, policyCwd: string, refsBeforeLocalRead: string | null) {
+    function* (
+      cwd: string,
+      policyCwd: string,
+      refsBeforeLocalRead: string | null,
+      refreshPullRequest?: boolean,
+    ) {
       return yield* withRemoteWriteLock(
         cwd,
         Effect.gen(function* () {
           const refreshUpstream = !Duration.isZero(yield* automaticFetchInterval);
           // Bump the PR lookup epoch after earlier remote writers have finished.
-          yield* workflow.invalidateStatus(cwd);
+          if (refreshPullRequest !== false) {
+            yield* workflow.invalidateStatus(cwd);
+          } else {
+            yield* workflow.invalidateLocalStatus(cwd);
+            yield* workflow.invalidateRemoteStatus(cwd);
+          }
           const { remote: remoteRead } = yield* readRemoteStatus(cwd, { refreshUpstream });
           // Without a fetch, the cached behind count cannot justify an automatic pull.
           const pulled = refreshUpstream
@@ -818,7 +828,12 @@ export const make = Effect.gen(function* () {
     }
     const refsBeforeLocalRead = yield* workflow.readStatusRefreshRefs(cwd);
     yield* refreshLocalStatusCore(cwd);
-    const { status, refs } = yield* refreshRemoteAndLocalTotals(cwd, rawCwd, refsBeforeLocalRead);
+    const { status, refs } = yield* refreshRemoteAndLocalTotals(
+      cwd,
+      rawCwd,
+      refsBeforeLocalRead,
+      options?.refreshPullRequest,
+    );
     return withRefsDigest(
       status,
       refs === null ? null : yield* workflow.readRefSnapshot(cwd, refs),
@@ -1059,7 +1074,8 @@ export const make = Effect.gen(function* () {
   const shareQueuedRefreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(
     "VcsStatusBroadcaster.shareQueuedRefreshStatus",
   )(function* (rawCwd, options) {
-    if (options?.localOnly) return yield* refreshStatus(rawCwd, options);
+    if (options?.localOnly || options?.refreshPullRequest === false)
+      return yield* refreshStatus(rawCwd, options);
     const requested = yield* Deferred.make<VcsRefreshStatusResult, GitManagerServiceError>();
     // Registering and forking together keeps an interrupt from leaving an entry with no worker.
     const shared = yield* Effect.uninterruptible(

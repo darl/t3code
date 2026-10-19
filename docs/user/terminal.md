@@ -27,6 +27,10 @@ Each terminal retains up to **5,000 lines** and **8 MiB** of scrollback on the s
 
 On iOS/iPadOS, long-press the terminal to paste or choose **Select Text**.
 
+To open a file path from terminal output in your preferred editor, hold Command on macOS or
+Ctrl on Windows and Linux while clicking it. Ordinary clicks and drags select terminal text.
+Web links open with an ordinary click.
+
 ## fish shell
 
 T3 Code launches `fish` with `no-query-term` to avoid startup delays, which overrides universal `fish_features`. To keep custom flags or re-enable `query-term`, export `fish_features` in the environment that launches T3 Code.

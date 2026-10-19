@@ -430,6 +430,22 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const defaultWorktreeBase = Effect.fn("ThreadLaunchService.defaultWorktreeBase")(function* (
+    cwd: string,
+  ) {
+    const refs = yield* git.listRefs({ cwd, refresh: true });
+    const ref = refs.refs.find((candidate) => candidate.isDefault);
+    if (ref !== undefined)
+      return ref.isRemote && ref.remoteName && ref.name.startsWith(`${ref.remoteName}/`)
+        ? ref.name.slice(ref.remoteName.length + 1)
+        : ref.name;
+    // A local repository may not have a remote HEAD identifying its default branch.
+    for (const candidate of ["trunk", "main", "master"]) {
+      if (yield* git.hasCommit({ cwd, refName: candidate })) return candidate;
+    }
+    return null;
+  });
+
   const checkWorktreeBase: ThreadLaunchService["Service"]["checkWorktreeBase"] = Effect.fn(
     "ThreadLaunchService.checkWorktreeBase",
   )(function* (input) {
@@ -498,6 +514,7 @@ const make = Effect.gen(function* () {
         }
         // git worktree add accepts remote-tracking branches; let Git decide when any matching ref exists.
         if (yield* git.hasRefNamed({ cwd, refName: baseRef })) return true;
+        if (!baseRef.startsWith("-") && (yield* defaultWorktreeBase(cwd)) !== null) return true;
         return !(yield* git.hasCommit({ cwd, refName: "HEAD" }));
       }).pipe(Effect.orElseSucceed(() => true)));
     if (!baseResolves)
@@ -551,6 +568,7 @@ const make = Effect.gen(function* () {
   const worktreeFallbackBase = Effect.fn("ThreadLaunchService.worktreeFallbackBase")(function* (
     cwd: string,
     remoteName: string | null,
+    fetchLocalDefault: boolean,
   ) {
     if (remoteName !== null) {
       const defaultBranch = yield* git.resolveDefaultBranchName(cwd, remoteName);
@@ -581,6 +599,18 @@ const make = Effect.gen(function* () {
           }
         }
       }
+    }
+    const localDefault = yield* defaultWorktreeBase(cwd);
+    if (localDefault !== null) {
+      if (fetchLocalDefault) {
+        const fetched = yield* git.fetchWorktreeBaseCommit({ cwd, refName: localDefault });
+        if (fetched !== null)
+          return {
+            startRef: fetched.commitSha,
+            baseRefName: `refs/remotes/${fetched.remoteRefName}`,
+          };
+      }
+      return { startRef: localDefault, baseRefName: localDefault };
     }
     const currentBranch = yield* git.currentBranch(cwd);
     if (currentBranch !== null) {
@@ -630,6 +660,7 @@ const make = Effect.gen(function* () {
     let createdTaskFolder: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
+    let recordedWorktreePath: string | null = null;
     let workspaceReleased = false;
     // Stop background renames before forgetting worktrees; completed renames record them again.
     let branchRename: Fiber.Fiber<unknown> | null = null;
@@ -805,10 +836,15 @@ const make = Effect.gen(function* () {
             (yield* git
               .resolvePrimaryRemoteName(project.workspaceRoot)
               .pipe(Effect.orElseSucceed(() => null)));
-          const fallback = yield* worktreeFallbackBase(project.workspaceRoot, remoteName).pipe(
-            Effect.orElseSucceed(() => null),
-          );
+          const fallback = yield* worktreeFallbackBase(
+            project.workspaceRoot,
+            remoteName,
+            input.workspaceStrategy.startFromOrigin === true,
+          ).pipe(Effect.orElseSucceed(() => null));
           if (fallback !== null) {
+            yield* setupTracker.stage(threadId, "checkout", {
+              detail: `Base ref "${requestedBaseRef}" is unavailable; using "${fallback.baseRefName.replace(/^refs\/remotes\/[^/]+\//, "")}".`,
+            });
             startRef = fallback.startRef;
             baseRefName = fallback.baseRefName;
             yield* setupTracker.update(threadId, (snapshot) => ({
@@ -936,10 +972,18 @@ const make = Effect.gen(function* () {
                   })),
                   Effect.mapError(mapError(input, "provision-worktree", threadId)),
                 );
-        worktreePath = worktree.path;
         branch = worktree.refName;
-        createdWorktreePath = worktreePath;
+        createdWorktreePath = worktree.path;
         createdBranch = branch;
+        worktreePath =
+          taskPlan === null
+            ? yield* git
+                .resolveWorktreeThreadPath({
+                  cwd: project.workspaceRoot,
+                  worktreePath: createdWorktreePath,
+                })
+                .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
+            : worktree.path;
         yield* setupTracker.update(threadId, (snapshot) => ({
           ...snapshot,
           worktreePath,
@@ -968,12 +1012,14 @@ const make = Effect.gen(function* () {
             Effect.tap(() =>
               Effect.sync(() => {
                 workspaceRecorded = true;
+                recordedWorktreePath = worktreePath;
               }),
             ),
             Effect.uninterruptible,
           );
       } else {
         workspaceRecorded = true;
+        recordedWorktreePath = worktreePath;
       }
 
       if (
@@ -1277,7 +1323,7 @@ const make = Effect.gen(function* () {
                   type: "thread.metadata.update",
                   commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
                   threadId,
-                  expectedWorktreePath: workspaceRecorded ? removedPath : null,
+                  expectedWorktreePath: recordedWorktreePath,
                   worktreePath: null,
                   branch: null,
                 })

@@ -30,6 +30,7 @@ import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as ArcadiaWorkspaceEntries from "./ArcadiaWorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
 
@@ -181,6 +182,9 @@ export const make = Effect.gen(function* () {
         pendingSymlinkTargetStats--;
       });
   };
+  // Arcadia (arc VCS) workspaces cannot be indexed by fff — see
+  // ArcadiaWorkspaceEntries for the arc-native list/search backends.
+  const arcadia = yield* ArcadiaWorkspaceEntries.make;
   const vcsProcess = yield* VcsProcess.VcsProcess;
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
@@ -319,6 +323,16 @@ export const make = Effect.gen(function* () {
       const normalizedQuery = normalizeSearchQuery(input.query, {
         trimLeadingPattern: /^[@./]+/,
       });
+      const arcadiaRoot = yield* arcadia.detectRoot(normalizedCwd);
+      if (arcadiaRoot !== null) {
+        return yield* arcadia.search({
+          cwd: normalizedCwd,
+          root: arcadiaRoot,
+          query: normalizedQuery,
+          limit: input.limit,
+          ...(input.kind !== undefined ? { kind: input.kind } : {}),
+        });
+      }
       const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths");
       markSearched(indexKey, yield* Clock.currentTimeMillis);
       const result = yield* Effect.gen(function* () {
@@ -413,6 +427,15 @@ export const make = Effect.gen(function* () {
     "WorkspaceEntries.searchContents",
   )(function* (input) {
     const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+    const arcadiaRoot = yield* arcadia.detectRoot(normalizedCwd);
+    if (arcadiaRoot !== null) {
+      const { cwd: _cwd, ...contentsInput } = input;
+      return yield* arcadia.searchContents({
+        cwd: normalizedCwd,
+        root: arcadiaRoot,
+        input: contentsInput,
+      });
+    }
     const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "content");
     markSearched(indexKey, yield* Clock.currentTimeMillis);
     return yield* Effect.gen(function* () {
@@ -424,6 +447,10 @@ export const make = Effect.gen(function* () {
   const list: WorkspaceEntries["Service"]["list"] = Effect.fn("WorkspaceEntries.list")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+      const arcadiaRoot = yield* arcadia.detectRoot(normalizedCwd);
+      if (arcadiaRoot !== null) {
+        return yield* arcadia.list(normalizedCwd);
+      }
       if (input.directoryPath !== undefined) {
         const directoryPath = input.directoryPath;
         const toError = (cause: unknown) =>

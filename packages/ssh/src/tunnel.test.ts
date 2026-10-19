@@ -31,7 +31,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { captureLauncher, captureLauncherFor, runLauncher } from "./launcherTestHarness.ts";
 import * as SshAuth from "./auth.ts";
-import { remoteStateKey } from "./command.ts";
+import { remoteStateKey, shellSingleQuote } from "./command.ts";
 import { SshCommandError, SshPasswordPromptError, SshReadinessError } from "./errors.ts";
 import * as SshTunnel from "./tunnel.ts";
 
@@ -413,18 +413,7 @@ describe("ssh tunnel scripts", () => {
       NodeChildProcess.execFileSync("sh", ["-c", `sha256sum ${archive} > SHA256SUMS`], {
         cwd: release,
       });
-      for (const tool of [
-        "sh",
-        "mkdir",
-        "mktemp",
-        "cat",
-        "rm",
-        "grep",
-        "cut",
-        checksum,
-        "tar",
-        "mv",
-      ]) {
+      for (const tool of ["sh", "mkdir", "mktemp", "cat", "rm", "grep", "cut", checksum, "mv"]) {
         NodeFS.symlinkSync(
           NodeChildProcess.execFileSync("sh", ["-c", `command -v ${tool}`], {
             encoding: "utf8",
@@ -440,6 +429,11 @@ describe("ssh tunnel scripts", () => {
       NodeFS.writeFileSync(
         NodePath.join(bin, "curl"),
         `#!/bin/sh\nfor last; do :; done\nfor a; do case "$a" in http*) src="${release}/\${a##*/}" ;; esac; done\nexec cat "$src" > "$last"\n`,
+        { mode: 0o755 },
+      );
+      NodeFS.writeFileSync(
+        NodePath.join(bin, "tar"),
+        '#!/bin/sh\nprintf "tar: gzip: Cannot exec\\n" >&2\nexit 2\n',
         { mode: 0o755 },
       );
       const runner = NodePath.join(root, "run-t3.sh");
@@ -1825,7 +1819,7 @@ const canBind = (port) =>
         // The runner gets only HOME, so `node` would resolve on sh's default PATH, which may not have it.
         yield* fs.writeFileString(
           `${runtimeDir}/t3`,
-          `#!/bin/sh\nexec '${process.execPath}' '${fakeT3}' '${version}' "$@"\n`,
+          `#!/bin/sh\nexec ${shellSingleQuote(yield* HostProcess.ExecutablePath)} ${shellSingleQuote(fakeT3)} ${shellSingleQuote(version)} "$@"\n`,
         );
         yield* fs.chmod(`${runtimeDir}/t3`, 0o755);
         yield* fs.writeFileString(`${runtimeDir}/.install-complete`, `${version}\n`);

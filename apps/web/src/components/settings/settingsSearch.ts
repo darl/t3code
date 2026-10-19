@@ -833,6 +833,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("composer rich text tiptap bold italic markdown styled wysiwyg")],
   },
   {
+    id: "terminal-copy-on-select",
+    title: msg("Copy terminal selection automatically"),
+    to: "/settings/general",
+    searchTerms: [msg("terminal clipboard select selection mouse copy popup menu")],
+  },
+  {
     id: "send-shortcut",
     title: msg("Send shortcut"),
     to: "/settings/chat",

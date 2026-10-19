@@ -33,6 +33,8 @@ export interface DesktopSettings {
   readonly mainWindowBounds: DesktopWindowBounds | null;
   readonly mainWindowMaximized: boolean;
   readonly serverExposureMode: DesktopServerExposureMode;
+  // Forks without published archives can use this absolute server script on every SSH host instead; those hosts need Node on PATH.
+  readonly sshRemoteServerEntryPath: string | null;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
   readonly updateChannel: DesktopUpdateChannel;
@@ -74,6 +76,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   mainWindowBounds: null,
   mainWindowMaximized: false,
   serverExposureMode: "local-only",
+  sshRemoteServerEntryPath: null,
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   updateChannel: "latest",
@@ -101,6 +104,7 @@ const DesktopSettingsDocument = Schema.Struct({
   mainWindowBounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: optionalReadableKey(Schema.Boolean),
   serverExposureMode: optionalReadableKey(DesktopServerExposureModeSchema),
+  sshRemoteServerEntryPath: optionalReadableKey(Schema.NullOr(Schema.String)),
   tailscaleServeEnabled: optionalReadableKey(Schema.Boolean),
   tailscaleServePort: optionalReadableKey(Schema.Number),
   updateChannel: optionalReadableKey(DesktopUpdateChannelSchema),
@@ -200,6 +204,13 @@ function normalizeTailscaleServePort(value: unknown): number {
     : DEFAULT_TAILSCALE_SERVE_PORT;
 }
 
+function normalizeSshRemoteServerEntryPath(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  // The remote runs `node <path>`, so only an absolute POSIX path is usable.
+  return trimmed.startsWith("/") ? trimmed : null;
+}
+
 function normalizeWslDistro(value: unknown): string | null {
   return typeof value === "string" && isValidDistroName(value) ? value : null;
 }
@@ -231,6 +242,7 @@ function normalizeDesktopSettingsDocument(
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
     serverExposureMode:
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
+    sshRemoteServerEntryPath: normalizeSshRemoteServerEntryPath(parsed.sshRemoteServerEntryPath),
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
     updateChannel: updateChannelConfiguredByUser
@@ -264,6 +276,9 @@ function toDesktopSettingsDocument(
   }
   if (settings.serverExposureMode !== defaults.serverExposureMode) {
     document.serverExposureMode = settings.serverExposureMode;
+  }
+  if (settings.sshRemoteServerEntryPath !== defaults.sshRemoteServerEntryPath) {
+    document.sshRemoteServerEntryPath = settings.sshRemoteServerEntryPath;
   }
   if (settings.tailscaleServeEnabled !== defaults.tailscaleServeEnabled) {
     document.tailscaleServeEnabled = settings.tailscaleServeEnabled;

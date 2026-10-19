@@ -1,3 +1,7 @@
+import * as ArcanumCli from "./ArcanumCli.ts";
+import * as ArcanumSourceControlProvider from "./ArcanumSourceControlProvider.ts";
+import * as ArcanumPullRequestApi from "../pullRequest/ArcanumPullRequestApi.ts";
+import * as ArcanumPullRequestProvider from "../pullRequest/ArcanumPullRequestProvider.ts";
 import type {
   SourceControlDriver,
   SourceControlDriverInstance,
@@ -9,7 +13,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ServerSourceControlHost from "./ServerSourceControlHost.ts";
-import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControlDefinitions.ts";
+import {
+  sourceControlDefinitions,
+  BUILT_IN_SOURCE_CONTROL_DRIVER_LIST,
+} from "./sourceControlDefinitions.ts";
 
 export interface SourceControlDriverEntry {
   readonly driver: Pick<SourceControlDriver, "kind" | "definition">;
@@ -29,16 +36,28 @@ const FLAGGED_DRIVERS: Readonly<Record<string, "tanstackSource">> = {
 
 const make = Effect.gen(function* () {
   const flags = yield* FeatureFlags.FeatureFlags;
-  const drivers = BUILT_IN_SOURCE_CONTROL_DRIVER_LIST.filter((driver) => {
+  const enabledDrivers = BUILT_IN_SOURCE_CONTROL_DRIVER_LIST.filter((driver) => {
     const flag = FLAGGED_DRIVERS[driver.kind];
     return flag === undefined || flags[flag];
   });
-  return yield* Effect.forEach(drivers, (driver) =>
+  const drivers: Array<SourceControlDriverEntry> = yield* Effect.forEach(enabledDrivers, (driver) =>
     driver.make.pipe(Effect.map((instance) => ({ driver, instance }))),
   );
+  const definition = sourceControlDefinitions.get("arcanum");
+  drivers.push({
+    driver: { kind: definition.kind, definition },
+    instance: {
+      sourceControl: yield* ArcanumSourceControlProvider.make,
+      pullRequests: yield* ArcanumPullRequestProvider.make,
+      discovery: ArcanumSourceControlProvider.discovery,
+    },
+  });
+  return drivers;
 });
 
 export const layer = Layer.effect(SourceControlDrivers, make).pipe(
+  Layer.provide(ArcanumPullRequestApi.layer),
+  Layer.provide(ArcanumCli.layer),
   Layer.provideMerge(ServerSourceControlHost.layer),
   Layer.provideMerge(SourceControlRateLimit.layer),
 );

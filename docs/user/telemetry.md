@@ -1,12 +1,12 @@
 # Product usage data and diagnostics
 
-T3 Code sends lightweight product usage events and relay connection traces to keep the app reliable and fast. Prompts, responses, file contents, and credentials are never included (unless you explicitly approve an [agent feedback](#agent-feedback) card with conversation text attached).
+This fork does not collect or send product usage events to `ingest.t3.codes` or PostHog.
+The analytics sender, queue, retries, and installation identity initialization are disabled.
+`T3CODE_TELEMETRY_ENABLED=true`, `T3CODE_TELEMETRY_HOST`, and the legacy `T3CODE_POSTHOG_*`
+variables cannot re-enable delivery. This applies to the server and all clients connected to it.
+Agent feedback reports remain local. Relay diagnostics and the other features below are separate.
 
-## Product usage events
-
-The server sends usage events to `ingest.t3.codes` under a hashed random install ID (plus a hashed T3 Connect account ID when signed in, and random client device IDs). Events contain provider, catalog model name (non-catalog models report as custom), reasoning effort, permission mode, turn/request outcome, duration, release channel, and token counts.
-
-## Disable telemetry
+## Disable other diagnostics
 
 - **Server / CLI**: Set `T3CODE_TELEMETRY_ENABLED=false` or `DO_NOT_TRACK=1` before starting (`DO_NOT_TRACK=1` takes precedence). CI environments (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`) disable telemetry by default unless `T3CODE_TELEMETRY_ENABLED=true`.
 - **Desktop app**: Export `T3CODE_TELEMETRY_ENABLED=false` or `DO_NOT_TRACK=1` in your shell profile (macOS/Linux) or user environment variables (Windows) and restart.
@@ -19,11 +19,12 @@ T3 Connect sends connection timings, request paths, environment/thread IDs, and 
 
 ## Agent feedback
 
-Optional tool for agents to report T3 Code bugs or missing capabilities. Configure in **Settings → Labs → Agent feedback**:
+Agent feedback reports stay on your machine in this fork, including reports approved in a card.
+The following settings control their local creation. Configure in **Settings → Labs → Agent feedback**:
 
 - **Off** (default): Feedback tools and `t3 feedback` are disabled.
-- **When I ask**: Agents submit a report only when you ask, shown as an interactive approval card before anything leaves your machine.
-- **Automatic**: Also sends minimal automated reports (problem kind + tool/command name only—no text or conversation) when an agent hits a T3 tool failure; enables `t3 feedback` CLI reporting (up to 10/hour).
+- **When I ask**: Agents create a report only when you ask, with an interactive approval card.
+- **Automatic**: Also saves minimal automated reports (problem kind + tool/command name only—no text or conversation) when an agent hits a T3 tool failure; enables `t3 feedback` CLI reporting (up to 10/hour).
 
 Approval cards show exact payloads (expected/actual/workaround, turn outline with no text, and optional **Include the conversation** up to 16 KB). File paths, usernames, hostnames, git remotes, and secret-like strings are scrubbed before saving, and reports use one-off random IDs. Inspect local reports with `t3 feedback list [--json]`.
 

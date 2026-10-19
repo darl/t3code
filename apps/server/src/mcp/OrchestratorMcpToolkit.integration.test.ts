@@ -278,6 +278,7 @@ describe("orchestrator MCP toolkit", () => {
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
         Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+        Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
         Layer.provide(
           Layer.mock(ProjectService.ProjectService)({ workspaceScanDirectory: Effect.succeed }),
         ),

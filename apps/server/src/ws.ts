@@ -1,4 +1,5 @@
 import { GitCommandError, OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import * as ArcanumCli from "./sourceControl/ArcanumCli.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- A synchronous digest inside the pure provider mapping.
 import * as NodeCrypto from "node:crypto";
 import * as FeatureFlags from "@t3tools/shared/FeatureFlags";
@@ -3320,7 +3321,10 @@ export const layerWsRpc = (
             .cancel(input.threadId)
             .pipe(Effect.map((cancelled) => ({ cancelled }))),
         [WS_METHODS.vcsRefreshStatus]: (input) =>
-          vcsStatusBroadcaster.refreshStatus(input.cwd, { localOnly: input.localOnly ?? false }),
+          vcsStatusBroadcaster.refreshStatus(input.cwd, {
+            localOnly: input.localOnly ?? false,
+            refreshPullRequest: input.refreshPullRequest !== false,
+          }),
         [WS_METHODS.vcsPull]: (input) =>
           gitWorkflow.pullCurrentBranch(input.cwd).pipe(
             Effect.matchCauseEffect({
@@ -3937,6 +3941,7 @@ export const layer = Layer.unwrap(
                   Layer.provide(
                     SourceControlProviderRegistry.layer.pipe(
                       Layer.provide(SourceControlBuiltInDrivers.layer),
+                      Layer.provide(ArcanumCli.layer),
                       Layer.provideMerge(GitVcsDriver.layer),
                       Layer.provide(
                         VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),

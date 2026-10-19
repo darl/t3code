@@ -585,6 +585,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu
       ? [gt("Show skills in slash menu")]
       : []),
+    ...(settings.terminalCopyOnSelect !== DEFAULT_UNIFIED_SETTINGS.terminalCopyOnSelect
+      ? [gt("Copy terminal selection automatically")]
+      : []),
     ...(settings.composerRichTextEnabled !== DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled
       ? [gt("Rich text composer")]
       : []),
@@ -726,6 +729,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
+      terminalCopyOnSelect: DEFAULT_UNIFIED_SETTINGS.terminalCopyOnSelect,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
@@ -1223,6 +1227,35 @@ export function GeneralSettingsPanel() {
                 </SelectItem>
               </SelectPopup>
             </Select>
+          }
+        />
+      </SettingsSection>
+      <SettingsSection id="terminal" title={gt("Terminal")}>
+        <SettingsRow
+          {...setting("terminal-copy-on-select")}
+          description={gt(
+            "Copy text to the clipboard as soon as you select it in the terminal, instead of showing the Copy / Add to chat popup. Add to chat stays in the right-click menu.",
+          )}
+          resetAction={
+            settings.terminalCopyOnSelect !== DEFAULT_UNIFIED_SETTINGS.terminalCopyOnSelect ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset terminal copy on select to default")}
+                onClick={() =>
+                  updateSettings({
+                    terminalCopyOnSelect: DEFAULT_UNIFIED_SETTINGS.terminalCopyOnSelect,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.terminalCopyOnSelect}
+              onCheckedChange={(checked) =>
+                updateSettings({ terminalCopyOnSelect: Boolean(checked) })
+              }
+              aria-label={gt("Copy terminal selection automatically")}
+            />
           }
         />
       </SettingsSection>

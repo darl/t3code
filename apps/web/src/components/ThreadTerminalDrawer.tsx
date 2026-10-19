@@ -641,6 +641,8 @@ function TerminalSessionViewport({
     }),
   );
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
+  const copyOnSelect = useClientSettings((settings) => settings.terminalCopyOnSelect);
+  const shouldCopyOnSelect = useEffectEvent(() => copyOnSelect);
   // Keyed by the launch (see TerminalViewport), so the atom is fixed for this surface.
   const terminalSessionAtom = attachedTerminalSessionAtom(environmentId, {
     threadId,
@@ -907,6 +909,14 @@ function TerminalSessionViewport({
         }
         focusIfCurrent(requestId);
       };
+
+      const copyCompletedSelection = (event: PointerEvent) => {
+        if (event.button !== 0 || !shouldCopyOnSelect()) return;
+        const selection = terminalRef.current?.getSelection();
+        if (selection) void copySelection(selection, ++selectionActionRequestIdRef.current);
+      };
+      mount.addEventListener("pointerup", copyCompletedSelection);
+      setupCleanups.push(() => mount.removeEventListener("pointerup", copyCompletedSelection));
 
       const pasteFromClipboard = async (requestId: number) => {
         if (!hasTerminalWriteAccess()) return;
@@ -1191,9 +1201,12 @@ function TerminalSessionViewport({
             return;
           }
           const error = squashAtomCommandFailure(result);
-          writeSystemMessage(
-            latestTerminal,
-            thrownErrorMessage(error, m) ?? m(msg("Unable to open path")),
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: m(msg("Unable to open path")),
+              description: thrownErrorMessage(error, m) ?? m(msg("An error occurred.")),
+            }),
           );
         })();
       }

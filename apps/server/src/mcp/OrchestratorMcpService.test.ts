@@ -218,6 +218,7 @@ describe("OrchestratorMcpService", () => {
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(RemoteDelegation.RemoteDelegation)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       );
       const scope: McpInvocationScope = {
         environmentId: EnvironmentId.make("environment:mcp-ack"),
@@ -318,6 +319,7 @@ describe("OrchestratorMcpService", () => {
       } as unknown as OrchestrationV2ThreadProjection;
       let childRuns = childProjection.runs;
       const layerDependencies = Layer.mergeAll(
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeServices.layer,
         NodeCrypto.layer,
         Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -818,6 +820,7 @@ describe("OrchestratorMcpService", () => {
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(RemoteDelegation.RemoteDelegation)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       );
       const scope: McpInvocationScope = {
         environmentId: EnvironmentId.make("environment:mcp-cancel"),
@@ -1029,6 +1032,7 @@ describe("OrchestratorMcpService", () => {
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(RemoteDelegation.RemoteDelegation)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       );
       const scope: McpInvocationScope = {
         environmentId: EnvironmentId.make("environment:mcp-cancel-failed"),
@@ -1126,6 +1130,7 @@ describe("OrchestratorMcpService", () => {
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(RemoteDelegation.RemoteDelegation)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       );
       const scope: McpInvocationScope = {
         environmentId: EnvironmentId.make("environment:mcp-cancel-dispose-failed"),
@@ -1284,6 +1289,7 @@ describe("OrchestratorMcpService", () => {
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
         NodeCrypto.layer,
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadRecords: (threadId) =>
             Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
@@ -1439,6 +1445,7 @@ describe("OrchestratorMcpService", () => {
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
         NodeCrypto.layer,
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadRecords: (threadId, fields, filter) =>
             ((fields as ReadonlyArray<string>).includes("subagents")
@@ -2250,6 +2257,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           Layer.mock(SecretRequests.SecretRequests)({}),
           Layer.mock(RemoteDelegation.RemoteDelegation)({}),
           Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         );
 
         yield* Effect.gen(function* () {
@@ -2958,6 +2966,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(RemoteDelegation.RemoteDelegation)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       );
 
       yield* Effect.gen(function* () {
@@ -3199,6 +3208,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       };
       let delegated = false;
       const layerDependencies = Layer.mergeAll(
+        Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         NodeServices.layer,
         NodeCrypto.layer,
         Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -3418,6 +3428,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           completedAt: null,
         };
         const layerDependencies = Layer.mergeAll(
+          Layer.mock(GitVcsDriver.GitVcsDriver)({}),
           NodeServices.layer,
           NodeCrypto.layer,
           Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -4015,6 +4026,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mock(SecretRequests.SecretRequests)({}),
             Layer.mock(RemoteDelegation.RemoteDelegation)({}),
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+            Layer.mock(GitVcsDriver.GitVcsDriver)({}),
           );
 
           yield* Effect.gen(function* () {
@@ -4179,6 +4191,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           Layer.mergeAll(
             NodeServices.layer,
             NodeCrypto.layer,
+            Layer.mock(GitVcsDriver.GitVcsDriver)({}),
             Layer.mock(ThreadManagementService.ThreadManagementService)({
               getThreadShell: (threadId) =>
                 Effect.succeed(threadId === boundThreadId ? boundThread : null),
@@ -4359,6 +4372,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                 Layer.mergeAll(
                   NodeServices.layer,
                   NodeCrypto.layer,
+                  Layer.mock(GitVcsDriver.GitVcsDriver)({}),
                   Layer.mock(ThreadManagementService.ThreadManagementService)({
                     getThreadShell: (threadId) =>
                       Ref.getAndUpdate(lookups, (count) => count + 1).pipe(
@@ -4687,7 +4701,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         remote: null,
         remoteDefault: null,
         refs: ["refs/heads/develop"],
-        baseRef: "main",
+        baseRef: null,
       },
       {
         name: "no recorded HEAD, remote main and a stale local master",
@@ -4761,10 +4775,17 @@ describe("OrchestratorMcpService provider resolution", () => {
             ),
           ),
         );
-        yield* mcp.scheduleTask(client, { projectId, prompt: "Check the build", schedule });
-        assert.deepEqual(yield* Ref.get(saved), [
-          { type: "worktree", baseRef, startFromOrigin: true },
-        ]);
+        const create = mcp.scheduleTask(client, { projectId, prompt: "Check the build", schedule });
+        if (baseRef === null) {
+          const failure = yield* create.pipe(Effect.flip);
+          assert.equal(failure.code, "invalid_request");
+          assert.deepEqual(yield* Ref.get(saved), []);
+        } else {
+          yield* create;
+          assert.deepEqual(yield* Ref.get(saved), [
+            { type: "worktree", baseRef, startFromOrigin: true },
+          ]);
+        }
       }),
     );
   });

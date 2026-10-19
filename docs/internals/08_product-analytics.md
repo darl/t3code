@@ -1,6 +1,10 @@
 # Product analytics
 
-The server owns analytics delivery, opt-out, and identity for every connected client. Clients never
+This fork replaces `AnalyticsService` with an inert layer: events and owner reports are discarded.
+No delivery, queue, timer, or installation identity initialization runs, and environment variables
+cannot enable the sender. The remaining text describes upstream conventions.
+
+Upstream, the server owns analytics delivery, opt-out, and identity for every connected client. Clients never
 load an analytics browser SDK, and visiting hosted web without an authenticated connection does not
 count as product use.
 

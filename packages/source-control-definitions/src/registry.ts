@@ -1,3 +1,4 @@
+import { arcanumDefinition } from "./arcanum.ts";
 import * as AzureDevOps from "@t3tools/source-control-azure-devops/shared/definition";
 import * as Bitbucket from "@t3tools/source-control-bitbucket/shared/definition";
 import { makeSourceControlDefinitionRegistry } from "@t3tools/source-control-core/shared/definition";
@@ -25,6 +26,7 @@ export const builtInSourceControlDefinitions = makeSourceControlDefinitionRegist
     Forgejo.definition,
     Bitbucket.definition,
     AzureDevOps.definition,
+    arcanumDefinition,
   ],
   {
     claimChangeRequestUrlsFirst: [
@@ -32,6 +34,7 @@ export const builtInSourceControlDefinitions = makeSourceControlDefinitionRegist
       TanStackSource.definition.kind,
       CursorOrigin.definition.kind,
       AzureDevOps.definition.kind,
+      arcanumDefinition.kind,
     ],
     recognizeRemotesIn: [
       GitCafe.definition.kind,

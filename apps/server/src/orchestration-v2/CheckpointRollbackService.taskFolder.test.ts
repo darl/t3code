@@ -104,6 +104,7 @@ const layerFor = (state: State, options: Options) => {
     Layer.provide(
       VcsDriverRegistry.layer.pipe(Layer.provide(VcsProcess.layer.pipe(Layer.provide(layerNode)))),
     ),
+    Layer.provide(layerConfig),
     Layer.provide(layerNode),
   );
   const layerCheckpoints = CheckpointService.layer.pipe(
